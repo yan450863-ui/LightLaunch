@@ -20,6 +20,13 @@
 /测试/残留检测验证/*
 !/测试/残留检测验证/Program.cs
 !/测试/残留检测验证/ResidueChecks.csproj
+!/测试/发布包验证/
+/测试/发布包验证/*
+!/测试/发布包验证/Program.cs
+!/测试/发布包验证/PackageChecks.csproj
+!/资料/界面/
+/资料/界面/*
+!/资料/界面/主界面.png
 **/bin/
 **/obj/
 **/.vs/

@@ -44,17 +44,19 @@ $quickStart = @"
 
 # Use the licenses belonging to the exact runtime packs restored for this publish.
 $assets = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'LightLaunch\obj\project.assets.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$runtimeConfig = Get-Content -LiteralPath (Join-Path $program 'LightLaunch.runtimeconfig.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $licenseRoot = Join-Path $stage '许可'
-foreach ($runtime in @('Microsoft.NETCore.App.Runtime.win-x64', 'Microsoft.WindowsDesktop.App.Runtime.win-x64')) {
-    $entry = @($assets.libraries.PSObject.Properties | Where-Object { $_.Name -like "$runtime/*" })
-    if ($entry.Count -ne 1) { throw "Cannot resolve runtime license: $runtime" }
+foreach ($framework in $runtimeConfig.runtimeOptions.includedFrameworks) {
+    $runtime = "$($framework.name).Runtime.win-x64"
+    $packageId = $runtime.ToLowerInvariant()
+    $runtimeVersion = [string]$framework.version
     $packagePath = $null
     foreach ($folder in $assets.packageFolders.PSObject.Properties.Name) {
-        $candidate = Join-Path $folder $entry[0].Value.path
+        $candidate = Join-Path (Join-Path $folder $packageId) $runtimeVersion
         if (Test-Path -LiteralPath $candidate) { $packagePath = $candidate; break }
     }
     if (-not $packagePath) { throw "Runtime package missing: $runtime" }
-    $destination = Join-Path $licenseRoot ($entry[0].Name -replace '/', '-')
+    $destination = Join-Path $licenseRoot "$runtime-$runtimeVersion"
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
     $licenses = @(Get-ChildItem -LiteralPath $packagePath -File | Where-Object { $_.Name -match '^(LICENSE(\.TXT)?|THIRD-PARTY-NOTICES\.TXT)$' })
     if (-not @($licenses | Where-Object { $_.Name -match '^LICENSE' }).Count) { throw "Runtime license missing: $runtime" }

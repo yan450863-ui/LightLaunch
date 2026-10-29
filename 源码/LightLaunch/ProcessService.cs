@@ -118,7 +118,7 @@ public sealed class ProcessService : IDisposable
             var count = session.Alive.Count;
             var uncertain = session.Uncertain || session.Job is null;
             return new(count > 0, uncertain, count, count > 0
-                ? $"运行中 · {count} 个进程{(uncertain ? "（部分状态无法确认）" : "")}" 
+                ? $"运行中 · {count} 个进程{(uncertain ? "（部分状态无法确认）" : "")}"
                 : uncertain ? "状态未知：启动器已退出或跟踪受限" : "已停止（本次启动）");
         }
     }
