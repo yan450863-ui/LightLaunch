@@ -1,0 +1,26 @@
+name: Windows build and checks
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build
+        run: dotnet build ./源码/LightLaunch/LightLaunch.csproj -c Release --nologo
+      - name: Check scoped residue detection with fake probes
+        run: dotnet run --project ./测试/残留检测验证/ResidueChecks.csproj -c Release

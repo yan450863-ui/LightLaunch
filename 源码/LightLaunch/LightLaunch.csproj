@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>0.1.10</Version>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>LightLaunch</AssemblyName>
+    <RootNamespace>LightLaunch</RootNamespace>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <NoWarn>CA1416</NoWarn>
+  </PropertyGroup>
+  <ItemGroup><EmbeddedResource Include="..\..\资料\使用说明.md" LogicalName="LightLaunch.UserGuide.md" /></ItemGroup>
+</Project>
