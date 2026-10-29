@@ -21,7 +21,7 @@ internal static class Program
         // launching managed software, or reading the user's settings/registry records.
         var assembly = Assembly.LoadFrom(Path.Combine(program, "LightLaunch.dll"));
         if (!assembly.GetManifestResourceNames().Contains("LightLaunch.UserGuide.md")) throw new Exception("Embedded guide missing.");
-        string temporary = Path.Combine(Path.GetTempPath(), "LightLaunch-PackageChecks", Guid.NewGuid().ToString("N"));
+        string temporary = Path.Combine(AppContext.BaseDirectory, "fixtures", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temporary);
         int result = 0;
         try

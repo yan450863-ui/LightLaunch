@@ -4,6 +4,8 @@
 
 **当前版本：0.1.10，早期公开版本。** 支持 Windows 11 x64，使用 .NET 8 Windows Forms。
 
+![轻启首次打开的主界面](资料/界面/主界面.png)
+
 ## 下载与使用
 
 从 [Releases](https://github.com/yan450863-ui/LightLaunch/releases/latest) 下载 `LightLaunch-0.1.10-win-x64.zip`，完整解压到可写目录，双击 `启动.cmd`。发布包自带 .NET 运行库，无需另外安装运行环境。GitHub 自动生成的 Source code 压缩包是源码，需要自行编译。
@@ -58,6 +60,9 @@ dotnet run --project ./测试/残留检测验证/ResidueChecks.csproj -c Release
 
 # 生成自带运行库的 Windows x64 发布包、源码包及 SHA-256 校验文件
 powershell -NoProfile -ExecutionPolicy Bypass -File ./源码/打包发布.ps1
+
+# 检查发布包的实际程序集、内置说明、全新配置及主窗口
+dotnet run --project ./测试/发布包验证/PackageChecks.csproj -c Release -- ./发布/0.1.10/LightLaunch-0.1.10-win-x64
 ```
 
 发布产物位于 `发布/0.1.10/`，本地开发可用 `源码/构建.ps1` 生成依赖本机运行库的 `程序/`，然后双击根目录 `启动.cmd`。
