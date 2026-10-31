@@ -11,8 +11,8 @@ Windows 11 轻量软件启动管理器。把便携软件、自制工具和单 EX
 前往 [Releases](https://github.com/yan450863-ui/LightLaunch/releases/latest)：
 
 - 首次使用：下载 `LightLaunch-0.1.11-win-x64.zip`，自带运行库。完整解压后双击 `启动.cmd`。
-- 已有 0.1.10：下载 `LightLaunch-0.1.11-update.zip`，完整解压后双击 `更新.cmd`，选择老版轻启主文件夹。只更新轻启自身程序，保留用户软件和配置，无需搬家。运行库不兼容时保留原版并提示使用完整包。
-- 自行编译：下载 `LightLaunch-0.1.11-source.zip` 或克隆仓库。
+- 已有 0.1.10：下载修正版 `LightLaunch-0.1.11-update-r2.zip`，完整解压后双击 `更新.cmd`，选择老版轻启主文件夹。r2 修复了原升级包 CMD 入口的换行问题，软件版本仍为 0.1.11。只更新轻启自身程序，保留用户软件和配置，无需搬家。运行库不兼容时保留原版并提示使用完整包。
+- 自行编译：下载 `LightLaunch-0.1.11-source-r2.zip` 或克隆仓库。
 
 程序默认请求管理员权限，需要在 Windows UAC 中确认；启动的工具会继承该权限。当前版本未签名。
 

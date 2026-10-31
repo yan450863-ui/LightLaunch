@@ -23,7 +23,14 @@ New-Item -ItemType Directory -Path (Join-Path $stage '软件文件夹') -Force |
 & dotnet publish $project -c Release -r win-x64 --self-contained true -o $program --nologo '-p:DebugType=None' '-p:DebugSymbols=false' '-p:ContinuousIntegrationBuild=true'
 if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
 
-Copy-Item -LiteralPath (Join-Path $projectRoot '启动.cmd') -Destination $stage
+# Git/export and editing tools may use LF even with .gitattributes. Normalize the
+# actual shipped bytes; cmd.exe can truncate lines after chcp on LF-only files.
+function Copy-WindowsBatch([string]$Source, [string]$Destination) {
+    $text = [IO.File]::ReadAllText($Source, [Text.Encoding]::UTF8)
+    $text = ($text -replace "`r?`n", "`r`n").TrimStart([char]0xFEFF)
+    [IO.File]::WriteAllText($Destination, $text, [Text.UTF8Encoding]::new($false))
+}
+Copy-WindowsBatch (Join-Path $projectRoot '启动.cmd') (Join-Path $stage '启动.cmd')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $projectRoot '资料\使用说明.md') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $projectRoot '资料\开源致谢.md') -Destination $stage
@@ -87,7 +94,7 @@ foreach ($name in @('coreclr.dll','hostfxr.dll','hostpolicy.dll','System.Private
 }
 [IO.File]::WriteAllText((Join-Path $updateStage '更新清单.json'), ($updateManifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($true))
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '发布工具\更新.ps1') -Destination $updateStage
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot '发布工具\更新.cmd') -Destination $updateStage
+Copy-WindowsBatch (Join-Path $PSScriptRoot '发布工具\更新.cmd') (Join-Path $updateStage '更新.cmd')
 [IO.File]::WriteAllText((Join-Path $updateStage '升级说明.txt'), "完整解压后双击 更新.cmd，选择老版本轻启的主文件夹。`r`n支持运行库兼容的 0.1.10；仅更新轻启自身文件，保留用户软件和配置。更新前自动备份，失败自动尝试恢复。`r`n更新完成后，如旧列表将软件拆成了子目录，请将目录模式切换为 直接放软件。`r`n", [Text.UTF8Encoding]::new($true))
 $updateZip = Join-Path $releaseRoot "LightLaunch-$version-update.zip"
 Compress-Archive -LiteralPath $updateStage -DestinationPath $updateZip -CompressionLevel Optimal

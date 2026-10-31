@@ -28,6 +28,11 @@ jobs:
         run: dotnet run --project ./测试/目录入口验证/DirectoryChecks.csproj -c Release
       - name: Package committed source and self-contained Windows build
         run: ./源码/打包发布.ps1
+      - name: Verify actual CMD entry from extracted upgrade ZIP
+        run: |
+          [xml]$project = Get-Content ./源码/LightLaunch/LightLaunch.csproj
+          $version = $project.Project.PropertyGroup.Version
+          ./测试/升级入口验证/Check-UpdateEntry.ps1 -UpdateZip "./发布/$version/LightLaunch-$version-update.zip" -InstallRoot "./发布/$version/LightLaunch-$version-win-x64"
       - name: Check packaged assembly and first-run form
         run: |
           [xml]$project = Get-Content ./源码/LightLaunch/LightLaunch.csproj
