@@ -30,6 +30,7 @@ public sealed class MigrationService
     }
     public MigrationPlan Prepare(string root,SoftwareItem item,UninstallRegistration registration,string originalPath)
     {
+        if (item.IsSingleFile) throw new IOException("单 EXE 不进行安装目录关联。");
         root=DirectoryJunction.LocalPath(root);
         if(!LibraryService.IsCurrentSoftwareItem(root,item) || item.EntryPath is null || !LibraryService.IsSafeEntryPath(item.FolderPath,item.EntryPath))
             throw new IOException("迁入软件目录或主入口无效，请刷新列表并选择主程序。");

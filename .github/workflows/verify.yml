@@ -24,7 +24,12 @@ jobs:
         run: dotnet build ./源码/LightLaunch/LightLaunch.csproj -c Release --nologo
       - name: Check scoped residue detection with fake probes
         run: dotnet run --project ./测试/残留检测验证/ResidueChecks.csproj -c Release
+      - name: Check software folders, standalone EXEs and aliases
+        run: dotnet run --project ./测试/目录入口验证/DirectoryChecks.csproj -c Release
       - name: Package committed source and self-contained Windows build
         run: ./源码/打包发布.ps1
       - name: Check packaged assembly and first-run form
-        run: dotnet run --project ./测试/发布包验证/PackageChecks.csproj -c Release -- ./发布/0.1.10/LightLaunch-0.1.10-win-x64
+        run: |
+          [xml]$project = Get-Content ./源码/LightLaunch/LightLaunch.csproj
+          $version = $project.Project.PropertyGroup.Version
+          dotnet run --project ./测试/发布包验证/PackageChecks.csproj -c Release -- "./发布/$version/LightLaunch-$version-win-x64"

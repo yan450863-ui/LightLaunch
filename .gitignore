@@ -24,6 +24,10 @@
 /测试/发布包验证/*
 !/测试/发布包验证/Program.cs
 !/测试/发布包验证/PackageChecks.csproj
+!/测试/目录入口验证/
+/测试/目录入口验证/*
+!/测试/目录入口验证/Program.cs
+!/测试/目录入口验证/DirectoryChecks.csproj
 !/资料/界面/
 /资料/界面/*
 !/资料/界面/主界面.png

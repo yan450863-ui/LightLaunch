@@ -13,7 +13,7 @@ internal sealed class EntryDialog : Form
     public EntryDialog(SoftwareItem item)
     {
         this.item = item;
-        Palette.Style(this, "设置入口 · " + item.Name, new Size(690, 450));
+        Palette.Style(this, "设置入口 · " + item.DisplayName, new Size(690, 490));
         var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), ColumnCount = 1, RowCount = 7 };
         body.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -31,10 +31,24 @@ internal sealed class EntryDialog : Form
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
         var save = Palette.Button("保存入口", true); save.Click += (_, _) => SaveEntry();
         var cancel = Palette.Button("取消"); cancel.DialogResult = DialogResult.Cancel;
-        var help=Palette.Button("使用说明");help.Click+=(_,_)=>GuideDialog.Open(this);
-        buttons.Controls.AddRange(new Control[] { save, cancel,help }); body.Controls.Add(buttons);
+        var browse = Palette.Button("浏览程序"); browse.Click += (_, _) => BrowseEntry();
+        buttons.Controls.AddRange(new Control[] { save, cancel, browse }); body.Controls.Add(buttons);
         Controls.Add(body); AcceptButton = save; CancelButton = cancel; Palette.FinishDialog(this);
         entries.DoubleClick += (_, _) => SaveEntry();
+    }
+    private void BrowseEntry()
+    {
+        using var picker = new OpenFileDialog { Title = "选择此软件的启动器", InitialDirectory = item.FolderPath,
+            Filter = "启动程序 (*.exe;*.cmd;*.bat)|*.exe;*.cmd;*.bat", CheckFileExists = true };
+        if (picker.ShowDialog(this) != DialogResult.OK) return;
+        if (!LibraryService.IsSafeEntryPath(item.FolderPath, picker.FileName))
+        { MessageBox.Show(this, "请选择此软件文件夹内的程序，不能选择外部文件或链接。", "选择入口"); return; }
+        if (item.IsSingleFile && !string.Equals(item.SingleFilePath, picker.FileName, StringComparison.OrdinalIgnoreCase))
+        { MessageBox.Show(this, "单 EXE 条目只能使用自身作为启动器。", "选择入口"); return; }
+        string relative = Path.GetRelativePath(item.FolderPath, picker.FileName);
+        int index = entries.Items.IndexOf(relative);
+        if (index < 0) index = entries.Items.Add(relative);
+        entries.SelectedIndex = index;
     }
     private void SaveEntry()
     {

@@ -18,6 +18,8 @@ $packageName = "LightLaunch-$version-win-x64"
 $stage = Join-Path $releaseRoot $packageName
 $program = Join-Path $stage '程序'
 New-Item -ItemType Directory -Path $program -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $stage '软件文件夹') -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $stage '软件文件夹\把软件放在这里.txt'), '每款软件保留完整文件夹放在这里；单个 EXE 也可直接放入。轻启首次启动默认读取此目录。', [Text.UTF8Encoding]::new($true))
 & dotnet publish $project -c Release -r win-x64 --self-contained true -o $program --nologo '-p:DebugType=None' '-p:DebugSymbols=false' '-p:ContinuousIntegrationBuild=true'
 if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
 
@@ -29,7 +31,8 @@ $quickStart = @"
 轻启 LightLaunch $version — Windows 11 x64
 
 完整解压后双击“启动.cmd”，按 Windows UAC 提示确认管理员权限。
-首次打开请选择自己的软件根目录，目录结构为：根目录 / 分类 / 软件文件夹。
+首次打开默认读取同级“软件文件夹”。每款软件放一个完整文件夹，单 EXE 也可直接放入。
+也可以更换软件根目录，或切换“按分类放软件”模式。
 本包自带 .NET 运行库。配置与检测记录首次运行后保存在同级“数据”目录。
 升级前退出程序，保留原“数据”目录，用新包覆盖程序文件。
 主程序：程序/LightLaunch.exe；详细操作见“使用说明.md”或程序内使用说明。
@@ -69,7 +72,26 @@ Compress-Archive -LiteralPath $stage -DestinationPath $binaryZip -CompressionLev
 $sourceZip = Join-Path $releaseRoot "LightLaunch-$version-source.zip"
 & git -C $projectRoot archive --format=zip "--prefix=LightLaunch-$version-source/" "--output=$sourceZip" HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Source archive failed.' }
-$checksums = foreach ($file in @($binaryZip, $sourceZip)) {
+
+$updateStage = Join-Path $releaseRoot "LightLaunch-$version-update"
+New-Item -ItemType Directory -Path (Join-Path $updateStage '程序文件') -Force | Out-Null
+$updateFiles = @('LightLaunch.exe', 'LightLaunch.dll', 'LightLaunch.deps.json', 'LightLaunch.runtimeconfig.json')
+$updateManifest = [ordered]@{ Version=$version; FromVersion='0.1.10'; Files=@(); Runtime=@() }
+foreach ($name in $updateFiles) {
+    $file = Join-Path $program $name
+    Copy-Item -LiteralPath $file -Destination (Join-Path $updateStage '程序文件')
+    $updateManifest.Files += @{Name=$name; SHA256=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash}
+}
+foreach ($name in @('coreclr.dll','hostfxr.dll','hostpolicy.dll','System.Private.CoreLib.dll','System.Windows.Forms.dll')) {
+    $updateManifest.Runtime += @{Name=$name; SHA256=(Get-FileHash -LiteralPath (Join-Path $program $name) -Algorithm SHA256).Hash}
+}
+[IO.File]::WriteAllText((Join-Path $updateStage '更新清单.json'), ($updateManifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($true))
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot '发布工具\更新.ps1') -Destination $updateStage
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot '发布工具\更新.cmd') -Destination $updateStage
+[IO.File]::WriteAllText((Join-Path $updateStage '升级说明.txt'), "完整解压后双击 更新.cmd，选择老版本轻启的主文件夹。`r`n支持运行库兼容的 0.1.10；仅更新轻启自身文件，保留用户软件和配置。更新前自动备份，失败自动尝试恢复。`r`n更新完成后，如旧列表将软件拆成了子目录，请将目录模式切换为 直接放软件。`r`n", [Text.UTF8Encoding]::new($true))
+$updateZip = Join-Path $releaseRoot "LightLaunch-$version-update.zip"
+Compress-Archive -LiteralPath $updateStage -DestinationPath $updateZip -CompressionLevel Optimal
+$checksums = foreach ($file in @($binaryZip, $sourceZip, $updateZip)) {
     $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $([IO.Path]::GetFileName($file))"
 }

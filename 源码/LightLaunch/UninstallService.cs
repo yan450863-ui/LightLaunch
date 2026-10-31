@@ -174,11 +174,12 @@ public sealed class UninstallService
         ArgumentNullException.ThrowIfNull(item);
         if (item.Preference.Kind != AppKind.Portable)
             throw new InvalidOperationException("只有明确标记为便携软件的项目才能移入回收站；未识别到卸载程序不代表便携版。");
+        if (item.IsSingleFile) { RecycleSingleFile(libraryRoot, item); return; }
         var folder = Path.GetFullPath(item.FolderPath);
-        var snapshot = new SoftwareItem { Id = item.Id, FolderPath = folder };
+        var snapshot = new SoftwareItem { Id = item.Id, FolderPath = folder, Layout = item.Layout };
         if (!LibraryService.IsCurrentSoftwareItem(libraryRoot, snapshot))
             throw new InvalidOperationException("软件文件夹已经移动或被替换，请刷新列表后重新核对。");
-        ValidateRecycleTree(libraryRoot, folder);
+        ValidateRecycleTree(libraryRoot, folder, snapshot.Layout);
         if (Thread.CurrentThread.GetApartmentState() == ApartmentState.STA)
         {
             RecycleOnSta(libraryRoot, snapshot);
@@ -194,6 +195,16 @@ public sealed class UninstallService
         worker.Start();
         worker.Join();
         if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    public void RecycleSingleFile(string libraryRoot, SoftwareItem item)
+    {
+        if (item.SingleFilePath is not string path || !LibraryService.IsCurrentSoftwareItem(libraryRoot, item))
+            throw new InvalidOperationException("单 EXE 已移动、被替换或不在当前软件目录中，本次未删除。");
+        var snapshot = new SoftwareItem { Id = item.Id, Layout = item.Layout, SingleFilePath = Path.GetFullPath(path), FolderPath = Path.GetFullPath(item.FolderPath) };
+        RecycleResidue(snapshot.SingleFilePath, () => {
+            if (!LibraryService.IsCurrentSoftwareItem(libraryRoot, snapshot)) throw new IOException("单 EXE 在确认后已变化，本次未删除。");
+        });
     }
 
     public void OpenWindowsAppsSettings()
@@ -334,10 +345,10 @@ public sealed class UninstallService
         return separator < 0 ? (command, "") : (command[..separator], command[(separator + 1)..].TrimStart());
     }
 
-    private static void ValidateRecycleTree(string libraryRoot, string folder)
+    private static void ValidateRecycleTree(string libraryRoot, string folder, LibraryLayout layout)
     {
-        if (!LibraryService.IsSafeSoftwareFolder(libraryRoot, folder))
-            throw new InvalidOperationException("只允许回收指定根目录下“分类\\软件”两级的软件文件夹；目录链接和越界路径已拒绝。");
+        if (!LibraryService.IsSafeSoftwareFolder(libraryRoot, folder, layout))
+            throw new InvalidOperationException("只允许回收当前目录模式下的软件文件夹；软件库根目录、目录链接和越界路径已拒绝。");
         var pending = new Stack<string>();
         pending.Push(folder);
         while (pending.Count > 0)
@@ -357,7 +368,7 @@ public sealed class UninstallService
     {
         var folder = itemSnapshot.FolderPath;
         RecycleExactOnSta(folder,()=>{
-            ValidateRecycleTree(libraryRoot,folder);
+            ValidateRecycleTree(libraryRoot,folder,itemSnapshot.Layout);
             if(!LibraryService.IsCurrentSoftwareItem(libraryRoot,itemSnapshot))throw new InvalidOperationException("软件文件夹在确认后被替换，回收操作已取消。请刷新列表。");
         });
     }

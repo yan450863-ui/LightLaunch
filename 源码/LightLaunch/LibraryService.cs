@@ -10,6 +10,7 @@ public sealed class LibraryService
     private readonly object _scanLock = new();
     private List<SoftwareItem> _lastItems = new();
     private string? _lastRoot;
+    private LibraryLayout _lastLayout;
     private static readonly StringComparer Paths = StringComparer.OrdinalIgnoreCase;
 
     public LibraryService(LauncherSettings settings)
@@ -38,6 +39,16 @@ public sealed class LibraryService
             return new(false, GetKnownItems(normalizedRoot, "根目录无法完整读取，原有记录已保留。"), warnings.Items);
 
         var items = new List<SoftwareItem>();
+        void AddSingleFile(string path, string categoryName)
+        {
+            if (!IsSafeStandaloneFile(normalizedRoot, path, _settings.Layout)) return;
+            string id = GetOrRememberIdentity(path);
+            var preference = GetPreference(id); preference.SingleFile = true;
+            preference.EntryRelativePath = Path.GetFileName(path);
+            items.Add(new SoftwareItem { Id = id, Layout = _settings.Layout, SingleFilePath = path,
+                FolderPath = Path.GetDirectoryName(path)!, Name = Path.GetFileNameWithoutExtension(path),
+                Category = categoryName, CandidateEntries = new() { path }, Preference = preference });
+        }
         var unavailablePrefixes = new List<string>();
         foreach (var category in categories)
         {
@@ -48,14 +59,17 @@ public sealed class LibraryService
                 warnings.Add($"无法读取分类：{category}");
                 continue;
             }
-            if (!categoryAttributes.HasFlag(FileAttributes.Directory)) continue;
+            if (!categoryAttributes.HasFlag(FileAttributes.Directory))
+            { if (_settings.Layout == LibraryLayout.Direct) AddSingleFile(category, "未分类"); continue; }
             if (categoryAttributes.HasFlag(FileAttributes.ReparsePoint))
             {
                 warnings.Add($"已跳过链接分类：{category}");
                 continue;
             }
 
-            var appFolders = ReadEntries(category, warnings, token, out bool categoryReadComplete);
+            bool categoryReadComplete = true;
+            var appFolders = _settings.Layout == LibraryLayout.Direct ? new List<string> { category }
+                : ReadEntries(category, warnings, token, out categoryReadComplete);
             if (!categoryReadComplete) unavailablePrefixes.Add(category);
             foreach (var folder in appFolders)
             {
@@ -66,13 +80,14 @@ public sealed class LibraryService
                     warnings.Add($"无法读取软件目录：{folder}");
                     continue;
                 }
-                if (!attributes.HasFlag(FileAttributes.Directory)) continue;
+                if (!attributes.HasFlag(FileAttributes.Directory))
+                { AddSingleFile(folder, Path.GetFileName(category)); continue; }
                 if (attributes.HasFlag(FileAttributes.ReparsePoint))
                 {
                     warnings.Add($"已跳过链接软件目录：{folder}");
                     continue;
                 }
-                if (!IsSafeSoftwareFolder(normalizedRoot, folder))
+                if (!IsSafeSoftwareFolder(normalizedRoot, folder, _settings.Layout))
                 {
                     unavailablePrefixes.Add(folder);
                     warnings.Add($"目录安全检查失败：{folder}");
@@ -81,19 +96,21 @@ public sealed class LibraryService
 
                 string id = GetOrRememberIdentity(folder);
                 AppPreference preference = GetPreference(id);
+                preference.SingleFile = false;
                 var appWarnings = new WarningList();
                 List<string> candidates = FindEntries(folder, appWarnings, token, out bool complete);
                 SanitizePreference(folder, preference, candidates, complete, appWarnings);
-                if (preference.EntryRelativePath is null && complete && candidates.Count == 1 && !LooksLikeMaintenanceEntry(candidates[0]))
-                    preference.EntryRelativePath = Path.GetRelativePath(folder, candidates[0]);
+                if (preference.EntryRelativePath is null && complete && RecommendEntry(folder, candidates) is string recommended)
+                    preference.EntryRelativePath = Path.GetRelativePath(folder, recommended);
 
                 string? previousWarning = appWarnings.Items.Count == 0 ? null : string.Join("；", appWarnings.Items);
                 var previous = _lastItems.FirstOrDefault(x => Paths.Equals(x.Id, id));
                 items.Add(new SoftwareItem
                 {
                     Id = id,
+                    Layout = _settings.Layout,
                     Name = Path.GetFileName(folder),
-                    Category = Path.GetFileName(category),
+                    Category = _settings.Layout == LibraryLayout.Direct ? "未分类" : Path.GetFileName(category),
                     FolderPath = folder,
                     CandidateEntries = candidates,
                     Preference = preference,
@@ -111,7 +128,7 @@ public sealed class LibraryService
         foreach (var item in GetKnownItems(normalizedRoot, "该目录暂时无法读取，保留已知记录；入口和运行状态需要重新核实。"))
         {
             if (!seenIds.Contains(item.Id) && unavailablePrefixes.Any(prefix =>
-                    Paths.Equals(prefix, item.FolderPath) || IsPathInside(prefix, item.FolderPath)))
+                    Paths.Equals(prefix, item.StoragePath) || IsPathInside(prefix, item.StoragePath)))
             {
                 items.Add(item);
                 seenIds.Add(item.Id);
@@ -121,19 +138,20 @@ public sealed class LibraryService
         items = items.OrderBy(x => x.Category, Paths).ThenBy(x => x.Name, Paths).ToList();
         // Keep app preferences, but discard path aliases proven absent by a completed scan.
         // This prevents an old rename alias from reappearing after a later access failure.
-        var currentFolders = new HashSet<string>(items.Select(x => x.FolderPath), Paths);
+        var currentFolders = new HashSet<string>(items.Select(x => x.StoragePath), Paths);
         lock (_settings)
         {
             foreach (string oldPath in _settings.FolderIdentities.Keys.ToArray())
             {
                 if (TryNormalize(oldPath, out string normalizedOldPath)
-                    && IsSecondLevelFolder(normalizedRoot, normalizedOldPath)
+                    && HasLayoutDepth(normalizedRoot, normalizedOldPath, _settings.Layout)
                     && !currentFolders.Contains(normalizedOldPath)
                     && !unavailablePrefixes.Any(prefix => Paths.Equals(prefix, normalizedOldPath) || IsPathInside(prefix, normalizedOldPath)))
                     _settings.FolderIdentities.Remove(oldPath);
             }
         }
         _lastRoot = normalizedRoot;
+        _lastLayout = _settings.Layout;
         _lastItems = items;
         return new(true, items, warnings.Items);
     }
@@ -173,6 +191,18 @@ public sealed class LibraryService
         return new(bytes, incomplete, calculatedAt);
     }
 
+    public FolderSizeResult CalculateItemSize(SoftwareItem item, CancellationToken cancellationToken)
+    {
+        if (!item.IsSingleFile) return CalculateSize(item.FolderPath, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            if (!IsSafeEntryPath(item.FolderPath, item.SingleFilePath!)) return new(0, true, DateTime.Now);
+            return new(new FileInfo(item.SingleFilePath!).Length, false, DateTime.Now);
+        }
+        catch (Exception ex) when (IsFileFailure(ex)) { return new(0, true, DateTime.Now); }
+    }
+
     /// <summary>Lexical strict-child check. Does not establish filesystem/link safety by itself.</summary>
     public static bool IsPathInside(string parent, string child)
     {
@@ -182,10 +212,10 @@ public sealed class LibraryService
         return normalizedChild.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
-    public static bool IsSafeSoftwareFolder(string root, string folder)
+    public static bool IsSafeSoftwareFolder(string root, string folder, LibraryLayout layout = LibraryLayout.Categorized)
     {
         if (!TryNormalize(root, out string normalizedRoot) || !TryNormalize(folder, out string normalizedFolder)
-            || !IsSecondLevelFolder(normalizedRoot, normalizedFolder)) return false;
+            || !HasLayoutDepth(normalizedRoot, normalizedFolder, layout)) return false;
         return HasNoReparseAncestors(normalizedRoot, true) && HasNoReparseAncestors(normalizedFolder, true);
     }
 
@@ -199,11 +229,23 @@ public sealed class LibraryService
 
     public static bool IsCurrentSoftwareItem(string root, SoftwareItem item)
     {
-        if (!IsSafeSoftwareFolder(root, item.FolderPath)) return false;
+        if (item.SingleFilePath is string file)
+        {
+            if (!IsSafeStandaloneFile(root, file, item.Layout) || !Paths.Equals(Path.GetDirectoryName(file), item.FolderPath)) return false;
+            string? fileId = TryGetDirectoryId(file);
+            return fileId is not null && Paths.Equals(fileId, item.Id);
+        }
+        if (!IsSafeSoftwareFolder(root, item.FolderPath, item.Layout)) return false;
         string? actualId = TryGetDirectoryId(item.FolderPath);
         return !item.Id.StartsWith("fs", StringComparison.OrdinalIgnoreCase)
             || (actualId is not null && string.Equals(actualId, item.Id, StringComparison.OrdinalIgnoreCase));
     }
+
+    public static bool IsSafeStandaloneFile(string root, string file, LibraryLayout layout)
+        => TryNormalize(root, out string normalizedRoot) && TryNormalize(file, out string normalizedFile)
+            && HasLayoutDepth(normalizedRoot, normalizedFile, layout)
+            && Path.GetExtension(normalizedFile).Equals(".exe", StringComparison.OrdinalIgnoreCase)
+            && IsSafeEntryPath(Path.GetDirectoryName(normalizedFile)!, normalizedFile);
 
     private static List<string> FindEntries(string folder, WarningList warnings, CancellationToken token, out bool complete)
     {
@@ -237,7 +279,7 @@ public sealed class LibraryService
                 else if (IsSupportedEntry(entry) && IsSafeEntryPath(folder, entry)) candidates.Add(entry);
             }
         }
-        return candidates.OrderBy(LooksLikeMaintenanceEntry)
+        return candidates.OrderBy(path => LooksLikeMaintenanceEntry(path) || LooksLikeAuxiliaryEntry(folder, path))
             .ThenBy(path => Path.GetRelativePath(folder, path).Count(c => c is '\\' or '/'))
             .ThenBy(path => path, Paths).ToList();
     }
@@ -318,12 +360,12 @@ public sealed class LibraryService
     {
         if (!TryNormalize(root, out string normalizedRoot)) return new();
         var known = new Dictionary<string, SoftwareItem>(Paths);
-        if (Paths.Equals(_lastRoot, normalizedRoot))
+        if (Paths.Equals(_lastRoot, normalizedRoot) && _lastLayout == _settings.Layout)
         {
             foreach (var item in _lastItems)
-                known[item.FolderPath] = new SoftwareItem
+                known[item.StoragePath] = new SoftwareItem
                 {
-                    Id = item.Id, Name = item.Name, Category = item.Category, FolderPath = item.FolderPath,
+                    Id = item.Id, Name = item.Name, Layout = item.Layout, SingleFilePath = item.SingleFilePath, Category = item.Category, FolderPath = item.FolderPath,
                     CandidateEntries = new List<string>(item.CandidateEntries), Preference = item.Preference,
                     SizeBytes = item.SizeBytes, SizeIncomplete = item.SizeIncomplete, SizeCalculatedAt = item.SizeCalculatedAt,
                     DiscoveryWarning = warning
@@ -336,26 +378,45 @@ public sealed class LibraryService
         var knownIds = new HashSet<string>(known.Values.Select(x => x.Id), Paths);
         foreach (var pair in identities.Reverse())
         {
-            if (!TryNormalize(pair.Key, out string folder) || !IsSecondLevelFolder(normalizedRoot, folder)
+            if (!TryNormalize(pair.Key, out string folder) || !HasLayoutDepth(normalizedRoot, folder, _settings.Layout)
                 || known.ContainsKey(folder) || !knownIds.Add(pair.Value)) continue;
+            var preference = GetPreference(pair.Value);
             known[folder] = new SoftwareItem
             {
                 Id = pair.Value,
-                Name = Path.GetFileName(folder),
-                Category = Path.GetFileName(Path.GetDirectoryName(folder)) ?? "",
-                FolderPath = folder,
-                Preference = GetPreference(pair.Value),
+                Layout = _settings.Layout,
+                SingleFilePath = preference.SingleFile ? folder : null,
+                Name = preference.SingleFile ? Path.GetFileNameWithoutExtension(folder) : Path.GetFileName(folder),
+                Category = _settings.Layout == LibraryLayout.Direct ? "未分类" : Path.GetFileName(Path.GetDirectoryName(folder)) ?? "",
+                FolderPath = preference.SingleFile ? Path.GetDirectoryName(folder)! : folder,
+                Preference = preference,
                 DiscoveryWarning = warning
             };
         }
         return known.Values.ToList();
     }
 
-    private static bool IsSecondLevelFolder(string root, string folder)
+    private static bool HasLayoutDepth(string root, string folder, LibraryLayout layout)
     {
         if (!IsPathInside(root, folder)) return false;
         string relative = Path.GetRelativePath(root, folder);
-        return relative.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries).Length == 2;
+        return Enum.IsDefined(layout) && relative.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries).Length == (layout == LibraryLayout.Direct ? 1 : 2);
+    }
+
+    public static string? RecommendEntry(string folder, IReadOnlyList<string> candidates)
+    {
+        var programs = candidates.Where(path => !LooksLikeMaintenanceEntry(path) && !LooksLikeAuxiliaryEntry(folder, path)).ToArray();
+        var topLevel = programs.Where(path => Paths.Equals(Path.GetDirectoryName(path), folder)).ToArray();
+        if (topLevel.Length == 1) return topLevel[0];
+        return programs.Length == 1 ? programs[0] : null;
+    }
+
+    private static bool LooksLikeAuxiliaryEntry(string folder, string path)
+    {
+        string name = Path.GetFileNameWithoutExtension(path);
+        if (new[] { "java", "javaw", "javaws", "dotnet", "crashpad_handler", "createdump", "update", "updater" }.Contains(name, Paths)) return true;
+        return Path.GetRelativePath(folder, path).Split(new[] { '\\', '/' }).SkipLast(1)
+            .Any(part => new[] { "runtime", "dotnet", "jre", "jvm", "redist" }.Contains(part, Paths));
     }
 
     private static bool IsSupportedEntry(string path) => Path.GetExtension(path) is string extension

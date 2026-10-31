@@ -18,7 +18,8 @@ internal sealed class MainForm : Form
     private readonly Dictionary<string, (string AppId, FolderSizeResult Value)> sizes = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource lifetime = new();
     private readonly DataGridView grid = new();
-    private readonly ListBox categories = new();
+    private readonly ComboBox categories = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly ComboBox layoutMode = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox search = new();
     private readonly Label rootLabel = new();
     private readonly Label footer = new();
@@ -26,6 +27,8 @@ internal sealed class MainForm : Form
     private readonly Label selectedPath = new();
     private readonly Label selectedEntry = new();
     private readonly Label selectedSize = new();
+    private readonly Label selectedStatus = new();
+    private readonly PictureBox selectedIcon = new() { SizeMode = PictureBoxSizeMode.Zoom };
     private readonly Label empty = new();
     private readonly Label listSummary = new();
     private readonly Button chooseRoot = Palette.Button("选择软件根目录", false, 164);
@@ -35,6 +38,7 @@ internal sealed class MainForm : Form
     private readonly Button open = Palette.Button("打开文件夹", false, 126);
     private readonly Button entry = Palette.Button("设置入口", false, 108);
     private readonly Button measure = Palette.Button("刷新大小", false, 108);
+    private readonly Button rename = Palette.Button("重命名", false, 108);
     private readonly Button uninstall = Palette.Button("卸载", false, 86);
     private readonly Button residueHistory = Palette.Button("残留记录", false, 126);
     private readonly System.Windows.Forms.Timer watchTimer = new() { Interval = 500 };
@@ -57,6 +61,13 @@ internal sealed class MainForm : Form
     {
         SuspendLayout();
         store = new SettingsStore(dataDirectory); library = new LibraryService(store.Settings);
+        if (string.IsNullOrWhiteSpace(store.Settings.LibraryRoot))
+        {
+            store.Settings.LibraryRoot = Path.GetFullPath(Path.Combine(dataDirectory, "..", "软件文件夹"));
+            store.Settings.Layout = LibraryLayout.Direct;
+            Directory.CreateDirectory(store.Settings.LibraryRoot);
+            store.Save();
+        }
         migration = new MigrationService(dataDirectory);
         residueCleanup=new ResidueCleanupService(dataDirectory);
         residueHistoryStore = new ResidueHistoryStore(Path.Combine(Path.GetFullPath(dataDirectory), "卸载检测"));
@@ -94,6 +105,7 @@ internal sealed class MainForm : Form
         refresh.Click += async (_, _) => await ScanAsync();
         launch.Click += async (_, _) => await LaunchAsync(); stop.Click += async (_, _) => await StopAsync();
         open.Click += (_, _) => OpenFolder(); entry.Click += (_, _) => ChooseEntry();
+        rename.Click += (_, _) => RenameSoftware();
         measure.Click += async (_, _) => { if (Selected is { } app) await MeasureOneAsync(app, true); };
         uninstall.Click += async (_, _) => await UninstallAsync();
     }
@@ -144,60 +156,76 @@ internal sealed class MainForm : Form
 
         var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Padding = new Padding(26, 0, 26, 16), Margin = Padding.Empty };
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 188)); body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        var side = new SurfacePanel { Dock = DockStyle.Fill, BackColor = Palette.Shell, Padding = new Padding(10, 16, 10, 14), Margin = new Padding(0, 0, 18, 0) };
-        var categoryTitle = new Label { Text = "软件分类", ForeColor = Palette.Muted, Height = 34, Dock = DockStyle.Top, Padding = new Padding(10, 0, 0, 0), Font = new Font(Font.FontFamily, 9) };
-        categories.Dock = DockStyle.Fill; categories.BorderStyle = BorderStyle.None; categories.BackColor = Palette.Shell;
-        categories.DrawMode = DrawMode.OwnerDrawFixed; categories.ItemHeight = 46; categories.IntegralHeight = false;
-        categories.DrawItem += DrawCategory;
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 65)); body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
+        categories.Dock = DockStyle.Fill; categories.AccessibleName = "按分类筛选软件";
         categories.SelectedIndexChanged += (_, _) => { if (!updatingGrid) RenderRows(); };
-        side.Controls.Add(categories); side.Controls.Add(categoryTitle); body.Controls.Add(side, 0, 0);
-
-        var content = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = Padding.Empty };
-        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); content.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
-        var listCard = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(12, 0, 12, 12), Margin = Padding.Empty };
-        var listLayout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, BackColor = Palette.Surface, Margin = Padding.Empty, Padding = Padding.Empty };
-        listLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54)); listLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var listCard = new SurfacePanel { Dock = DockStyle.Fill, Padding = new Padding(12, 0, 12, 12), Margin = new Padding(0, 0, 18, 0) };
+        var listLayout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Palette.Surface, Margin = Padding.Empty, Padding = Padding.Empty };
+        listLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54)); listLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44)); listLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var listHeading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty, Padding = new Padding(8, 0, 8, 0) };
         listHeading.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         listHeading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40)); listHeading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
         listHeading.Controls.Add(new Label { Text = "软件库", Dock = DockStyle.Fill, Font = new Font(Font.FontFamily, 12, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
         listSummary.Dock = DockStyle.Fill; listSummary.TextAlign = ContentAlignment.MiddleRight; listSummary.ForeColor = Palette.Muted; listSummary.Font = new Font(Font.FontFamily, 9);
         listHeading.Controls.Add(listSummary, 1, 0); listLayout.Controls.Add(listHeading, 0, 0);
+        var filters = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty, Padding = new Padding(6, 0, 6, 8) };
+        filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        filters.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layoutMode.Dock = DockStyle.Fill; layoutMode.AccessibleName = "软件目录结构";
+        layoutMode.Items.AddRange(new object[] { "按分类放软件", "直接放软件" }); layoutMode.SelectedIndex = (int)store.Settings.Layout;
+        layoutMode.SelectedIndexChanged += async (_, _) => {
+            if (scanning || processingAction || layoutMode.SelectedIndex < 0) return;
+            store.Settings.Layout = (LibraryLayout)layoutMode.SelectedIndex; sizes.Clear(); items.Clear();
+            try { Save(); } catch (Exception ex) { ShowError(ex); }
+            await ScanAsync();
+        };
+        filters.Controls.Add(categories, 0, 0); filters.Controls.Add(layoutMode, 1, 0); listLayout.Controls.Add(filters, 0, 1);
         var listPanel = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Margin = Padding.Empty };
         grid.Dock = DockStyle.Fill; grid.RowHeadersVisible = false;
         grid.AllowUserToAddRows = false; grid.AllowUserToDeleteRows = false; grid.AllowUserToResizeRows = false; grid.MultiSelect = false;
         grid.ReadOnly = true; grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect; grid.AutoGenerateColumns = false;
         Palette.StyleGrid(grid); grid.RowTemplate.Height = 58;
         grid.Columns.Add(new DataGridViewImageColumn { Name = "Icon", HeaderText = "", Width = 52, ImageLayout = DataGridViewImageCellLayout.Zoom, SortMode = DataGridViewColumnSortMode.NotSortable });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "AppName", HeaderText = "软件名称", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 150 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "AppName", HeaderText = "显示名称", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 110 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Category", HeaderText = "分类", Width = 108 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Size", HeaderText = "文件夹大小", Width = 128, SortMode = DataGridViewColumnSortMode.NotSortable });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "运行状态", Width = 166 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OriginalName", HeaderText = "原名称", Width = 150 });
+        grid.Columns["OriginalName"]!.DisplayIndex = 2;
+        grid.Columns[2].Visible = false; grid.Columns[3].Visible = false;
         grid.Columns[1].DefaultCellStyle.Font = new Font(Font.FontFamily, 10, FontStyle.Bold);
         grid.Columns[2].DefaultCellStyle.ForeColor = Palette.Muted;
         grid.SelectionChanged += (_, _) => { if (!updatingGrid) UpdateSelection(); };
         grid.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0) await LaunchAsync(); };
         grid.CellPainting += PaintStatus;
         empty.Dock = DockStyle.Fill; empty.TextAlign = ContentAlignment.MiddleCenter; empty.Font = new Font(Font.FontFamily, 11); empty.ForeColor = Palette.Muted;
-        listPanel.Controls.Add(grid); listPanel.Controls.Add(empty); listLayout.Controls.Add(listPanel, 0, 1);
-        listCard.Controls.Add(listLayout); content.Controls.Add(listCard, 0, 0);
+        listPanel.Controls.Add(grid); listPanel.Controls.Add(empty); listLayout.Controls.Add(listPanel, 0, 2);
+        listCard.Controls.Add(listLayout); body.Controls.Add(listCard, 0, 0);
 
-        var detail = new SurfacePanel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Margin = new Padding(0, 14, 0, 0), Padding = new Padding(20, 16, 20, 14) };
-        var detailLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Margin = Padding.Empty };
-        foreach (int h in new[] { 28, 23, 23, 23 }) detailLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, h));
-        detailLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        selectedName.Font = new Font(Font.FontFamily, 12, FontStyle.Bold);
-        foreach (var label in new[] { selectedName, selectedPath, selectedEntry, selectedSize }) {
+        var detail = new SurfacePanel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Margin = Padding.Empty, Padding = new Padding(20, 16, 20, 14) };
+        var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty };
+        var detailLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 8, Margin = Padding.Empty };
+        detailLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        foreach (int h in new[] { 72, 36, 28, 28, 52, 52, 32, 184 }) detailLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, h));
+        selectedIcon.Size = selectedIcon.MinimumSize = new Size(64, 64); selectedIcon.Anchor = AnchorStyles.Left; selectedIcon.Margin = new Padding(0, 0, 0, 8);
+        detailLayout.Controls.Add(selectedIcon, 0, 0);
+        selectedName.Font = new Font(Font.FontFamily, 14, FontStyle.Bold);
+        foreach (var label in new[] { selectedName, selectedStatus, selectedSize, selectedPath, selectedEntry }) {
             label.Dock = DockStyle.Fill; label.Margin = Padding.Empty; label.AutoEllipsis = true;
             label.TextAlign = ContentAlignment.MiddleLeft; detailLayout.Controls.Add(label);
         }
-        foreach (var label in new[] { selectedPath, selectedEntry, selectedSize }) { label.ForeColor = Palette.Muted; label.Font = new Font(Font.FontFamily, 9); }
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty, Padding = new Padding(0, 8, 0, 0) };
-        launch.Width = 104; stop.Width = 76; open.Width = 118; entry.Width = 98; measure.Width = 98; uninstall.Width = 76;
-        actions.Controls.AddRange(new Control[] { launch, stop, open, entry, measure, uninstall });
-        detailLayout.Controls.Add(actions); detail.Controls.Add(detailLayout); content.Controls.Add(detail, 0, 1);
-        body.Controls.Add(content, 1, 0); layout.Controls.Add(body, 0, 2);
+        foreach (var label in new[] { selectedPath, selectedEntry, selectedSize, selectedStatus }) { label.ForeColor = Palette.Muted; label.Font = new Font(Font.FontFamily, 9); }
+        detailLayout.Controls.Add(new Label { Text = "软件功能", Dock = DockStyle.Fill, ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft });
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 4, Margin = Padding.Empty };
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        for (int i = 0; i < 4; i++) actions.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+        int actionIndex = 0;
+        foreach (var button in new[] { launch, stop, open, entry, rename, measure, uninstall }) {
+            button.Dock = DockStyle.Fill; button.Margin = new Padding(0, 4, actionIndex % 2 == 0 ? 8 : 0, 4);
+            actions.Controls.Add(button, actionIndex % 2, actionIndex / 2); actionIndex++;
+        }
+        detailLayout.Controls.Add(actions); scroll.Controls.Add(detailLayout); detail.Controls.Add(scroll);
+        body.Controls.Add(detail, 1, 0); layout.Controls.Add(body, 0, 2);
 
         footer.Dock = DockStyle.Fill; footer.Padding = new Padding(28, 0, 16, 0); footer.TextAlign = ContentAlignment.MiddleLeft;
         footer.BackColor = Palette.Shell; footer.ForeColor = Palette.Muted; footer.Font = new Font(Font.FontFamily, 8.5f);
@@ -229,13 +257,12 @@ internal sealed class MainForm : Form
     private void ApplyListMetrics()
     {
         float scale = DeviceDpi / 96f;
-        categories.ItemHeight = (int)Math.Round(46 * scale);
         grid.ColumnHeadersHeight = (int)Math.Round(40 * scale);
         grid.RowTemplate.Height = (int)Math.Round(58 * scale);
         foreach (DataGridViewRow row in grid.Rows) row.Height = grid.RowTemplate.Height;
-        foreach (var (name, width) in new[] { ("Icon", 52), ("Category", 108), ("Size", 128), ("Status", 166) })
+        foreach (var (name, width) in new[] { ("Icon", 52), ("Category", 108), ("Size", 128), ("Status", 150), ("OriginalName", 140) })
             grid.Columns[name]!.Width = (int)Math.Round(width * scale);
-        grid.Columns["AppName"]!.MinimumWidth = (int)Math.Round(150 * scale);
+        grid.Columns["AppName"]!.MinimumWidth = (int)Math.Round(110 * scale);
     }
 
     private void PaintStatus(object? sender, DataGridViewCellPaintingEventArgs e)
@@ -307,8 +334,8 @@ internal sealed class MainForm : Form
             }
             items.Clear(); items.AddRange(result.Items);
             foreach (var app in items) {
-                if (sizes.TryGetValue(app.FolderPath, out var cached) && cached.AppId == app.Id && DateTime.Now - cached.Value.CalculatedAt < TimeSpan.FromSeconds(60)) ApplySize(app, cached.Value);
-                else { sizes.Remove(app.FolderPath); app.SizeBytes = null; app.SizeCalculatedAt = null; app.SizeIncomplete = false; }
+                if (sizes.TryGetValue(app.StoragePath, out var cached) && cached.AppId == app.Id && DateTime.Now - cached.Value.CalculatedAt < TimeSpan.FromSeconds(60)) ApplySize(app, cached.Value);
+                else { sizes.Remove(app.StoragePath); app.SizeBytes = null; app.SizeCalculatedAt = null; app.SizeIncomplete = false; }
             }
             Save(); RenderCategories(); RenderRows();
             SetStatus(result.Warnings.Count>0?result.Warnings[0]:$"已更新 · {DateTime.Now:HH:mm}");
@@ -326,7 +353,7 @@ internal sealed class MainForm : Form
         updatingGrid = true; categories.Items.Clear(); categories.Items.Add(new CategoryOption(null, items.Count));
         foreach (var g in items.GroupBy(x => x.Category).OrderBy(x => x.Key, StringComparer.CurrentCultureIgnoreCase)) categories.Items.Add(new CategoryOption(g.Key, g.Count()));
         categories.SelectedIndex = 0;
-        for (int i = 1; i < categories.Items.Count; i++) if (((CategoryOption)categories.Items[i]).Name == previous) categories.SelectedIndex = i;
+        for (int i = 1; i < categories.Items.Count; i++) if ((categories.Items[i] as CategoryOption)?.Name == previous) categories.SelectedIndex = i;
         updatingGrid = false;
     }
     private void RenderRows()
@@ -334,11 +361,12 @@ internal sealed class MainForm : Form
         if (closed) return;
         string? selectedId = Selected?.Id; string? category = (categories.SelectedItem as CategoryOption)?.Name;
         string query = search.Text.Trim();
-        var visible = items.Where(x => category == null || x.Category == category).Where(x => query.Length == 0 || (x.Name + " " + x.Category + " " + x.FolderPath).Contains(query, StringComparison.CurrentCultureIgnoreCase)).OrderBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
+        var visible = items.Where(x => category == null || x.Category == category).Where(x => query.Length == 0 || (x.DisplayName + " " + x.Name + " " + x.Category + " " + x.FolderPath).Contains(query, StringComparison.CurrentCultureIgnoreCase)).OrderBy(x => x.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToArray();
         listSummary.Text = $"{visible.Length} 个软件" + (category is null ? " · 全部分类" : " · " + category);
         updatingGrid = true; grid.Rows.Clear();
         foreach (var app in visible) {
-            int index = grid.Rows.Add(GetIcon(app), app.Name, app.Category, SizeText(app), StatusText(app)); var row = grid.Rows[index]; row.Tag = app;
+            int index = grid.Rows.Add(GetIcon(app), app.DisplayName, app.Category, SizeText(app), StatusText(app), app.Name); var row = grid.Rows[index]; row.Tag = app;
+            row.Cells["OriginalName"].ToolTipText = app.Name;
             row.Cells[1].ToolTipText = app.FolderPath; row.Cells[4].ToolTipText = app.DiscoveryWarning ?? "仅跟踪由管理器启动的程序；外部启动的程序可能未被跟踪。";
             ColorStatus(row, app);
         }
@@ -346,7 +374,7 @@ internal sealed class MainForm : Form
         var selectedRow = grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(x => (x.Tag as SoftwareItem)?.Id == selectedId) ?? grid.Rows.Cast<DataGridViewRow>().FirstOrDefault();
         if (selectedRow != null) { selectedRow.Selected = true; grid.CurrentCell = selectedRow.Cells[1]; }
         updatingGrid = false;
-        if (items.Count == 0) SetEmpty("暂无软件", "将软件文件夹放入分类目录。");
+        if (items.Count == 0) SetEmpty("暂无软件", store.Settings.Layout == LibraryLayout.Direct ? "将完整的软件文件夹放入当前软件目录。" : "将软件文件夹放入分类目录。");
         else if (visible.Length == 0) SetEmpty("没有匹配的软件", "");
         else { empty.Visible = false; grid.Visible = true; }
         UpdateSelection();
@@ -354,8 +382,7 @@ internal sealed class MainForm : Form
     private Image GetIcon(SoftwareItem app)
     {
         string key = app.EntryPath ?? app.FolderPath; if (icons.TryGetValue(key, out var value)) return value;
-        try { if (app.EntryPath is string p && File.Exists(p)) { using var icon = Icon.ExtractAssociatedIcon(p); if (icon != null) return icons[key] = icon.ToBitmap(); } } catch { }
-        return icons[key] = SystemIcons.Application.ToBitmap();
+        return icons[key] = SoftwareIconService.Load(app);
     }
     private string StatusText(SoftwareItem app)
     {
@@ -371,16 +398,18 @@ internal sealed class MainForm : Form
     {
         if (closed) return;
         residueHistory.Enabled = !scanning && !processingAction;
-        chooseRoot.Enabled = refresh.Enabled = !scanning && !processingAction;
+        chooseRoot.Enabled = refresh.Enabled = layoutMode.Enabled = !scanning && !processingAction;
         var app = Selected; bool has = app != null, canEdit = has && rootAvailable && !scanning && !processingAction;
-        foreach (var b in new[] { launch, stop, open, entry, measure, uninstall }) b.Enabled = canEdit;
-        if (app == null) { selectedName.Text = "选择软件"; selectedPath.Text = selectedEntry.Text = selectedSize.Text = ""; return; }
-        selectedName.Text = app.Name; selectedPath.Text = "位置：" + app.FolderPath;
+        foreach (var b in new[] { launch, stop, open, entry, measure, uninstall, rename }) b.Enabled = canEdit;
+        if (app == null) { selectedName.Text = "选择软件"; selectedPath.Text = selectedEntry.Text = selectedSize.Text = selectedStatus.Text = ""; selectedIcon.Image = null; return; }
+        selectedName.Text = app.DisplayName; selectedPath.Text = "位置：" + app.FolderPath;
+        selectedIcon.Image = GetIcon(app); selectedStatus.Text = StatusText(app);
         selectedEntry.Text = app.EntryPath == null ? "入口：未设置" : "入口：" + app.Preference.EntryRelativePath + (app.Preference.Arguments.Length == 0 ? "" : "  " + app.Preference.Arguments);
-        selectedSize.Text = app.SizeCalculatedAt is DateTime ? $"大小：{SizeText(app)}" + (app.SizeIncomplete ? "（统计不完整）" : "") : "大小：计算中…";
+        selectedSize.Text = (app.IsSingleFile ? "文件大小：" : "文件夹大小：") + (app.SizeCalculatedAt is DateTime ? SizeText(app) + (app.SizeIncomplete ? "（统计不完整）" : "") : "计算中…");
+        uninstall.Text = app.IsSingleFile ? "删除 EXE" : "卸载";
         if (app.DiscoveryWarning is string w) selectedSize.Text += " · " + w;
         stop.Enabled = has && !processingAction && states.TryGetValue(app.Id, out var state) && state.IsRunning;
-        entry.Enabled = canEdit && app.CandidateEntries.Count > 0;
+        entry.Enabled = canEdit;
     }
     private async Task PollProcessesAsync()
     {
@@ -406,9 +435,9 @@ internal sealed class MainForm : Form
     {
         int generation = expectedGeneration ?? scanGeneration;
         try {
-            var result = await Task.Run(() => library.CalculateSize(app.FolderPath, lifetime.Token)); if (closed || generation != scanGeneration) return;
-            var current = items.FirstOrDefault(x => x.Id == app.Id && x.FolderPath == app.FolderPath); if (current == null) return;
-            sizes[app.FolderPath] = (app.Id, result);
+            var result = await Task.Run(() => library.CalculateItemSize(app, lifetime.Token)); if (closed || generation != scanGeneration) return;
+            var current = items.FirstOrDefault(x => x.Id == app.Id && x.StoragePath == app.StoragePath); if (current == null) return;
+            sizes[app.StoragePath] = (app.Id, result);
             ApplySize(current, result); foreach (DataGridViewRow row in grid.Rows) if ((row.Tag as SoftwareItem)?.Id == app.Id) row.Cells[3].Value = SizeText(current);
             UpdateSelection(); if (userRequested) SetStatus("大小已刷新 · " + app.Name + (result.Incomplete ? " · 统计不完整" : ""));
         } catch (OperationCanceledException) { }
@@ -416,7 +445,7 @@ internal sealed class MainForm : Form
     }
     private bool ChooseEntry(SoftwareItem? target = null)
     {
-        var app = target ?? Selected; if (app == null || app.CandidateEntries.Count == 0) return false;
+        var app = target ?? Selected; if (app == null) return false;
         bool ownsAction = !processingAction;
         if (ownsAction) { processingAction = true; UpdateSelection(); }
         try {
@@ -425,6 +454,15 @@ internal sealed class MainForm : Form
             Save(); RenderRows(); SetStatus("已保存启动入口 · " + app.Name); return true;
         } catch (Exception ex) { ShowError(ex); return false; }
         finally { if (ownsAction) { processingAction = false; UpdateSelection(); } }
+    }
+    private void RenameSoftware()
+    {
+        if (Selected is not { } app || processingAction || scanning) return;
+        using var dialog = new RenameDialog(app);
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        string? previous = app.Preference.DisplayName;
+        try { app.SetDisplayName(dialog.ChosenName); Save(); RenderRows(); SetStatus("已保存显示名称 · " + app.DisplayName); }
+        catch (Exception ex) { app.Preference.DisplayName = previous; ShowError(ex); }
     }
     private async Task LaunchAsync()
     {
@@ -471,6 +509,12 @@ internal sealed class MainForm : Form
         try {
             var status = await Task.Run(() => processes.GetState(app.Id));
             if (status.IsRunning || status.IsUncertain) { MessageBox.Show(this, "请先停止此软件。若跟踪状态未知，请确认进程已退出后重新打开管理器。", "软件仍在运行或状态未知", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            if (app.IsSingleFile)
+            {
+                if (MessageBox.Show(this, $"仅将这个 EXE 移入回收站：\r\n{app.SingleFilePath}\r\n\r\n同目录的其他文件会保留。确认继续？", "删除单 EXE", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                { await Task.Run(() => uninstaller.RecycleSingleFile(root, app)); SetStatus("已移入回收站 · " + app.DisplayName); }
+                return;
+            }
             if(await HandlePreviousMigrationAsync(root,app))return;
             SetStatus("正在识别当前软件的卸载方式…");
             var registrations = await Task.Run(() => uninstaller.GetRegistrations());

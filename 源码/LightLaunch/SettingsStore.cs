@@ -78,7 +78,7 @@ public sealed class SettingsStore
             }
         }
 
-        Settings = loaded ?? new LauncherSettings();
+        Settings = loaded ?? new LauncherSettings { Layout = LibraryLayout.Direct };
         Normalize(Settings);
     }
 

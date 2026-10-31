@@ -29,6 +29,7 @@ public sealed class ResidueService
     public ResidueSnapshot CaptureSnapshot(SoftwareItem item, UninstallRegistration registration)
     {
         ArgumentNullException.ThrowIfNull(item);
+        if (item.IsSingleFile) throw new ArgumentException("单 EXE 不按整个目录检测卸载残留。", nameof(item));
         var snapshot = ValidateSnapshot(ResidueSnapshot.Create(item.Name, item.FolderPath, item.EntryPath, registration));
         var folder = InspectPath(snapshot.OriginalFolderPath);
         return snapshot with
