@@ -35,6 +35,14 @@
 /测试/问题修复验证/*
 !/测试/问题修复验证/Program.cs
 !/测试/问题修复验证/ReviewChecks.csproj
+!/测试/功能区验证/
+/测试/功能区验证/*
+!/测试/功能区验证/Program.cs
+!/测试/功能区验证/FeatureChecks.csproj
+!/测试/定位验证/
+/测试/定位验证/*
+!/测试/定位验证/Program.cs
+!/测试/定位验证/LocationChecks.csproj
 !/资料/界面/
 /资料/界面/*
 !/资料/界面/主界面.png

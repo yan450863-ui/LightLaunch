@@ -110,6 +110,19 @@ public sealed class MigrationService
     public MigrationRecord? RecoverInterrupted(string root,SoftwareItem item)
     {
         var record=GetForItem(item);
+        if(record is {State:"Detached"} && (!Same(root,record.LibraryRoot) || !Same(item.FolderPath,record.TargetPath))) {
+            if(!item.Id.StartsWith("fs",StringComparison.OrdinalIgnoreCase) || LibraryService.TryGetDirectoryId(item.FolderPath)!=item.Id
+                || EntryExists(record.TargetPath) || EntryExists(record.OriginalPath) || !LibraryService.IsCurrentSoftwareItem(root,item))
+                throw new IOException("迁入记录的位置已变化，但无法安全确认新目录；请人工核对。");
+            var updated=record with {LibraryRoot=DirectoryJunction.LocalPath(root),TargetPath=DirectoryJunction.LocalPath(item.FolderPath)};
+            string main=Path.GetFullPath(Path.Combine(updated.TargetPath,updated.MainRelativePath));
+            if(!LibraryService.IsSafeEntryPath(updated.TargetPath,main) || !File.Exists(main))throw new IOException("迁入记录的主程序已变化，请人工核对。");
+            ValidateRecord(root,item,updated);
+            var currentRegistrations=readRegistrations();
+            if(currentRegistrations is not UninstallRegistrationList{ReadComplete:true} || !currentRegistrations.Any(r=>UninstallService.SameRegistration(r,record.Registration)))
+                throw new IOException("原卸载登记已变化或无法读取，未更新迁入记录。");
+            Write(updated); record=updated;
+        }
         if(record?.State=="TemporaryPrepared") {
             ValidateRecord(root,item,record);
             if(IsOrdinaryEntry(record.OriginalPath)) {

@@ -5,6 +5,8 @@ namespace LightLaunch;
 internal sealed class MainForm : Form
 {
     private readonly SettingsStore store;
+    private readonly string dataDirectory;
+    private readonly SoftwarePictures pictureStore;
     private readonly LibraryService library;
     private readonly ProcessService processes = new();
     private readonly UninstallService uninstaller = new();
@@ -20,21 +22,24 @@ internal sealed class MainForm : Form
     private readonly DataGridView grid = new();
     private readonly ComboBox categories = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly ComboBox layoutMode = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly ComboBox sortMode = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox search = new();
     private readonly Label rootLabel = new();
     private readonly Label footer = new();
     private readonly Label selectedName = new();
     private readonly Label selectedPath = new();
     private readonly Label selectedEntry = new();
+    private readonly RichTextBox selectedDescription = new() { Dock = DockStyle.Fill, ReadOnly = true, BorderStyle = BorderStyle.None, ScrollBars = RichTextBoxScrollBars.Vertical, DetectUrls = false, TabStop = false, BackColor = Palette.Surface };
     private readonly Label selectedSize = new();
     private readonly Label selectedStatus = new();
     private readonly PictureBox selectedIcon = new() { SizeMode = PictureBoxSizeMode.Zoom };
+    private readonly PictureBox[] selectedPictures = new PictureBox[2];
+    private readonly string?[] displayedPictures = new string?[2];
     private readonly Label empty = new();
     private readonly Label listSummary = new();
     private readonly Button chooseRoot = Palette.Button("选择软件根目录", false, 164);
     private readonly Button refresh = Palette.Button("刷新列表", false, 105);
     private readonly Button launch = Palette.Button("启动", true, 86);
-    private readonly Button stop = Palette.Button("停止", false, 86);
     private readonly Button open = Palette.Button("打开文件夹", false, 126);
     private readonly Button entry = Palette.Button("设置入口", false, 108);
     private readonly Button measure = Palette.Button("刷新大小", false, 108);
@@ -46,6 +51,7 @@ internal sealed class MainForm : Form
     private FileSystemWatcher? watcher;
     private bool scanning, polling, processingAction, updatingGrid, watcherDirty, closed, rootAvailable;
     private bool migrationUninstallBusy;
+    private bool launchStopsRunning;
     private ResidueHistoryDialog? activeResidueHistory;
     private volatile bool watcherError;
     private DateTime lastChange, firstChange, lastPeriodicScan;
@@ -59,8 +65,9 @@ internal sealed class MainForm : Form
 
     public MainForm(string dataDirectory)
     {
+        this.dataDirectory = dataDirectory;
         SuspendLayout();
-        store = new SettingsStore(dataDirectory); library = new LibraryService(store.Settings);
+        store = new SettingsStore(dataDirectory); pictureStore = new SoftwarePictures(dataDirectory); library = new LibraryService(store.Settings);
         if (string.IsNullOrWhiteSpace(store.Settings.LibraryRoot))
         {
             store.Settings.LibraryRoot = Path.GetFullPath(Path.Combine(dataDirectory, "..", "软件文件夹"));
@@ -68,10 +75,11 @@ internal sealed class MainForm : Form
             Directory.CreateDirectory(store.Settings.LibraryRoot);
             store.Save();
         }
+        LibraryRelocation.Recover(store.Settings, Path.GetFullPath(Path.Combine(dataDirectory, "..")));
         migration = new MigrationService(dataDirectory);
         residueCleanup=new ResidueCleanupService(dataDirectory);
         residueHistoryStore = new ResidueHistoryStore(Path.Combine(Path.GetFullPath(dataDirectory), "卸载检测"));
-        Text = "轻启 · 软件管理器"; ClientSize = new Size(1220, 760); MinimumSize = new Size(1090, 620);
+        Text = "轻启 · 软件管理器"; Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); ClientSize = new Size(1220, 760); MinimumSize = new Size(1090, 620);
         StartPosition = FormStartPosition.CenterScreen; Font = new Font("Microsoft YaHei UI", 10);
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96); BackColor = Palette.Paper; ForeColor = Palette.Ink;
         BuildUi();
@@ -92,6 +100,7 @@ internal sealed class MainForm : Form
         FormClosed += (_, _) => {
             closed = true; lifetime.Cancel(); watchTimer.Stop(); processTimer.Stop(); watcher?.Dispose();
             processes.Dispose(); foreach (var icon in icons.Values) icon.Dispose();
+            foreach (var box in selectedPictures) { var image = box.Image; box.Image = null; image?.Dispose(); }
             watchTimer.Dispose(); processTimer.Dispose(); lifetime.Dispose();
         };
         watchTimer.Tick += async (_, _) => {
@@ -103,7 +112,7 @@ internal sealed class MainForm : Form
         processTimer.Tick += async (_, _) => await PollProcessesAsync();
         chooseRoot.Click += async (_, _) => await ChooseRootAsync();
         refresh.Click += async (_, _) => await ScanAsync();
-        launch.Click += async (_, _) => await LaunchAsync(); stop.Click += async (_, _) => await StopAsync();
+        launch.Click += async (_, _) => { if (launchStopsRunning) await StopAsync(); else await LaunchAsync(); };
         open.Click += (_, _) => OpenFolder(); entry.Click += (_, _) => ChooseEntry();
         rename.Click += (_, _) => RenameSoftware();
         measure.Click += async (_, _) => { if (Selected is { } app) await MeasureOneAsync(app, true); };
@@ -151,7 +160,10 @@ internal sealed class MainForm : Form
         var help = Palette.Button("使用说明",false,100);help.Click+=(_,_)=>GuideDialog.Open(this);
         systemApps.Click += (_, _) => RunUi(() => uninstaller.OpenWindowsAppsSettings());
         residueHistory.Click += (_, _) => RunUi(ShowResidueHistory);
-        utilities.Controls.AddRange(new Control[] { refresh, residueHistory, systemApps,help }); toolbar.Controls.Add(utilities, 1, 0);
+        var shortcuts = Palette.Button("快捷方式", false, 110);
+        shortcuts.Click += (_, _) => RunUi(() => { using var dialog = new ShortcutRepairDialog(items.ToArray(), store.Settings, migration, dataDirectory); dialog.ShowDialog(this); });
+        toolbar.ColumnStyles[1].Width = 582;
+        utilities.Controls.AddRange(new Control[] { refresh, residueHistory, shortcuts, systemApps,help }); toolbar.Controls.Add(utilities, 1, 0);
         layout.Controls.Add(toolbar, 0, 1);
 
         var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Padding = new Padding(26, 0, 26, 16), Margin = Padding.Empty };
@@ -168,8 +180,8 @@ internal sealed class MainForm : Form
         listHeading.Controls.Add(new Label { Text = "软件库", Dock = DockStyle.Fill, Font = new Font(Font.FontFamily, 12, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
         listSummary.Dock = DockStyle.Fill; listSummary.TextAlign = ContentAlignment.MiddleRight; listSummary.ForeColor = Palette.Muted; listSummary.Font = new Font(Font.FontFamily, 9);
         listHeading.Controls.Add(listSummary, 1, 0); listLayout.Controls.Add(listHeading, 0, 0);
-        var filters = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty, Padding = new Padding(6, 0, 6, 8) };
-        filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        var filters = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty, Padding = new Padding(6, 0, 6, 8) };
+        filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.4f)); filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f)); filters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
         filters.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layoutMode.Dock = DockStyle.Fill; layoutMode.AccessibleName = "软件目录结构";
         layoutMode.Items.AddRange(new object[] { "按分类放软件", "直接放软件" }); layoutMode.SelectedIndex = (int)store.Settings.Layout;
@@ -179,7 +191,15 @@ internal sealed class MainForm : Form
             try { Save(); } catch (Exception ex) { ShowError(ex); }
             await ScanAsync();
         };
-        filters.Controls.Add(categories, 0, 0); filters.Controls.Add(layoutMode, 1, 0); listLayout.Controls.Add(filters, 0, 1);
+        sortMode.Dock = DockStyle.Fill; sortMode.AccessibleName = "软件排列顺序";
+        sortMode.Items.AddRange(new object[] { "按使用排序", "按名字排序" }); sortMode.SelectedIndex = (int)store.Settings.Sort;
+        sortMode.SelectedIndexChanged += (_, _) => {
+            if (sortMode.SelectedIndex < 0) return;
+            store.Settings.Sort = (LibrarySort)sortMode.SelectedIndex;
+            try { Save(); } catch (Exception ex) { ShowError(ex); }
+            RenderRows();
+        };
+        filters.Controls.Add(categories, 0, 0); filters.Controls.Add(layoutMode, 1, 0); filters.Controls.Add(sortMode, 2, 0); listLayout.Controls.Add(filters, 0, 1);
         var listPanel = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Surface, Margin = Padding.Empty };
         grid.Dock = DockStyle.Fill; grid.RowHeadersVisible = false;
         grid.AllowUserToAddRows = false; grid.AllowUserToDeleteRows = false; grid.AllowUserToResizeRows = false; grid.MultiSelect = false;
@@ -191,6 +211,7 @@ internal sealed class MainForm : Form
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Size", HeaderText = "文件夹大小", Width = 128, SortMode = DataGridViewColumnSortMode.NotSortable });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "运行状态", Width = 166 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "OriginalName", HeaderText = "原名称", Width = 150 });
+        foreach (DataGridViewColumn column in grid.Columns) column.SortMode = DataGridViewColumnSortMode.NotSortable;
         grid.Columns["OriginalName"]!.DisplayIndex = 2;
         grid.Columns[2].Visible = false; grid.Columns[3].Visible = false;
         grid.Columns[1].DefaultCellStyle.Font = new Font(Font.FontFamily, 10, FontStyle.Bold);
@@ -206,21 +227,43 @@ internal sealed class MainForm : Form
         var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty };
         var detailLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 8, Margin = Padding.Empty };
         detailLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        foreach (int h in new[] { 72, 36, 28, 28, 52, 52, 32, 184 }) detailLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, h));
+        foreach (int h in new[] { 90, 52, 32, 24, 52, 24, 92, 132 }) detailLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, h));
         selectedIcon.Size = selectedIcon.MinimumSize = new Size(64, 64); selectedIcon.Anchor = AnchorStyles.Left; selectedIcon.Margin = new Padding(0, 0, 0, 8);
-        detailLayout.Controls.Add(selectedIcon, 0, 0);
+        var identity = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+        identity.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82)); identity.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        identity.Controls.Add(selectedIcon, 0, 0);
+        var identityText = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty };
+        identityText.RowStyles.Add(new RowStyle(SizeType.Absolute, 34)); identityText.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); identityText.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         selectedName.Font = new Font(Font.FontFamily, 14, FontStyle.Bold);
-        foreach (var label in new[] { selectedName, selectedStatus, selectedSize, selectedPath, selectedEntry }) {
+        foreach (var label in new[] { selectedName, selectedStatus, selectedSize }) {
+            label.Dock = DockStyle.Fill; label.Margin = Padding.Empty; label.AutoEllipsis = true;
+            label.TextAlign = ContentAlignment.MiddleLeft; identityText.Controls.Add(label);
+        }
+        identity.Controls.Add(identityText, 1, 0); detailLayout.Controls.Add(identity);
+        foreach (var label in new[] { selectedPath, selectedEntry }) {
             label.Dock = DockStyle.Fill; label.Margin = Padding.Empty; label.AutoEllipsis = true;
             label.TextAlign = ContentAlignment.MiddleLeft; detailLayout.Controls.Add(label);
         }
         foreach (var label in new[] { selectedPath, selectedEntry, selectedSize, selectedStatus }) { label.ForeColor = Palette.Muted; label.Font = new Font(Font.FontFamily, 9); }
-        detailLayout.Controls.Add(new Label { Text = "软件功能", Dock = DockStyle.Fill, ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft });
-        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 4, Margin = Padding.Empty };
+        detailLayout.Controls.Add(new Label { Text = "软件简介", Dock = DockStyle.Fill, ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft });
+        selectedDescription.Margin = Padding.Empty; selectedDescription.ForeColor = Palette.Ink; detailLayout.Controls.Add(selectedDescription);
+        detailLayout.Controls.Add(new Label { Text = "软件图片", Dock = DockStyle.Fill, ForeColor = Palette.Muted, TextAlign = ContentAlignment.MiddleLeft });
+        var images = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+        images.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); images.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        for (int index = 0; index < 2; index++) {
+            int slot = index;
+            var box = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Palette.SurfaceAlt,
+                Margin = new Padding(0, 0, index == 0 ? 8 : 0, 4), AccessibleName = "软件图片 " + (index + 1) };
+            box.Paint += (_, e) => { if (box.Image is null) TextRenderer.DrawText(e.Graphics, displayedPictures[slot] is null ? "暂无图片" : "图片不可用", Font, box.ClientRectangle, Palette.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter); };
+            box.Click += (_, _) => ShowPicture(slot);
+            selectedPictures[index] = box; images.Controls.Add(box, index, 0);
+        }
+        detailLayout.Controls.Add(images);
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Margin = Padding.Empty };
         actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        for (int i = 0; i < 4; i++) actions.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+        for (int i = 0; i < 3; i++) actions.RowStyles.Add(new RowStyle(SizeType.Percent, 100f / 3));
         int actionIndex = 0;
-        foreach (var button in new[] { launch, stop, open, entry, rename, measure, uninstall }) {
+        foreach (var button in new[] { launch, open, entry, rename, measure, uninstall }) {
             button.Dock = DockStyle.Fill; button.Margin = new Padding(0, 4, actionIndex % 2 == 0 ? 8 : 0, 4);
             actions.Controls.Add(button, actionIndex % 2, actionIndex / 2); actionIndex++;
         }
@@ -292,6 +335,7 @@ internal sealed class MainForm : Form
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
         if (LibraryService.LibraryRootProblem(dialog.SelectedPath) is string problem) { ShowError(new IOException(problem)); return; }
         store.Settings.LibraryRoot = Path.GetFullPath(dialog.SelectedPath); sizes.Clear();
+        store.Settings.LibraryRootIdentity = LibraryService.TryGetDirectoryId(store.Settings.LibraryRoot);
         try { Save(); } catch (Exception ex) { ShowError(ex); }
         ConfigureWatcher(); await ScanAsync();
     }
@@ -319,6 +363,12 @@ internal sealed class MainForm : Form
         scanning = true; lastPeriodicScan = DateTime.UtcNow; refresh.Enabled = chooseRoot.Enabled = false; UpdateSelection(); int generation = ++scanGeneration;
         SetStatus("正在检查软件目录…");
         try {
+            if (store.Settings.LibraryRootIdentity is string expected && Directory.Exists(root)
+                && LibraryService.TryGetDirectoryId(root) is string actual && actual != expected)
+            {
+                rootAvailable = false; SetStatus("根目录身份已变化，请重新选择软件根目录");
+                SetEmpty("根目录需要重新确认", root); return;
+            }
             HashSet<string> changed;
             lock (changesLock) { changed = new HashSet<string>(changedPaths, StringComparer.OrdinalIgnoreCase); changedPaths.Clear(); watcherDirty = false; }
             if (watcherError) sizes.Clear();
@@ -362,7 +412,10 @@ internal sealed class MainForm : Form
         if (closed) return;
         string? selectedId = Selected?.Id; string? category = (categories.SelectedItem as CategoryOption)?.Name;
         string query = search.Text.Trim();
-        var visible = items.Where(x => category == null || x.Category == category).Where(x => query.Length == 0 || (x.DisplayName + " " + x.Name + " " + x.Category + " " + x.FolderPath).Contains(query, StringComparison.CurrentCultureIgnoreCase)).OrderBy(x => x.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToArray();
+        var filtered = items.Where(x => category == null || x.Category == category).Where(x => query.Length == 0 || (x.DisplayName + " " + x.Name + " " + x.Category + " " + x.FolderPath).Contains(query, StringComparison.CurrentCultureIgnoreCase));
+        var visible = (store.Settings.Sort == LibrarySort.Recent
+            ? filtered.OrderByDescending(x => x.Preference.LastLaunchedAt).ThenBy(x => x.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+            : filtered.OrderBy(x => x.DisplayName, StringComparer.CurrentCultureIgnoreCase)).ToArray();
         listSummary.Text = $"{visible.Length} 个软件" + (category is null ? " · 全部分类" : " · " + category);
         int oldTop = grid.FirstDisplayedScrollingRowIndex;
         string? topId = oldTop >= 0 ? (grid.Rows[oldTop].Tag as SoftwareItem)?.Id : null;
@@ -407,16 +460,48 @@ internal sealed class MainForm : Form
         residueHistory.Enabled = !scanning && !processingAction;
         chooseRoot.Enabled = refresh.Enabled = layoutMode.Enabled = !scanning && !processingAction;
         var app = Selected; bool has = app != null, canEdit = has && rootAvailable && !scanning && !processingAction;
-        foreach (var b in new[] { launch, stop, open, entry, measure, uninstall, rename }) b.Enabled = canEdit;
-        if (app == null) { selectedName.Text = "选择软件"; selectedPath.Text = selectedEntry.Text = selectedSize.Text = selectedStatus.Text = ""; selectedIcon.Image = null; return; }
+        foreach (var b in new[] { launch, open, entry, measure, uninstall, rename }) b.Enabled = canEdit;
+        launchStopsRunning = app != null && states.TryGetValue(app.Id, out var tracked) && tracked.IsRunning;
+        launch.Text = launchStopsRunning ? "停止" : "启动"; launch.AccessibleName = launch.Text;
+        if (launchStopsRunning) launch.Enabled = !processingAction;
+        if (app == null) { selectedName.Text = "选择软件"; selectedPath.Text = selectedEntry.Text = selectedSize.Text = selectedStatus.Text = selectedDescription.Text = ""; selectedIcon.Image = null; UpdatePictures(null, null); return; }
         selectedName.Text = app.DisplayName; selectedPath.Text = "位置：" + app.FolderPath;
         selectedIcon.Image = GetIcon(app); selectedStatus.Text = StatusText(app);
+        UpdatePictures(app.Preference.Picture1, app.Preference.Picture2);
+        string description = string.IsNullOrWhiteSpace(app.Preference.Description) ? "暂无简介" : app.Preference.Description;
+        if (!string.Equals(selectedDescription.Text.Replace("\r\n", "\n"), description.Replace("\r\n", "\n"), StringComparison.Ordinal))
+            selectedDescription.Text = description;
+        selectedDescription.ForeColor = string.IsNullOrWhiteSpace(app.Preference.Description) ? Palette.Muted : Palette.Ink;
         selectedEntry.Text = app.EntryPath == null ? "入口：未设置" : "入口：" + app.Preference.EntryRelativePath + (app.Preference.Arguments.Length == 0 ? "" : "  " + app.Preference.Arguments);
         selectedSize.Text = (app.IsSingleFile ? "文件大小：" : "文件夹大小：") + (app.SizeCalculatedAt is DateTime ? SizeText(app) + (app.SizeIncomplete ? "（统计不完整）" : "") : "计算中…");
         uninstall.Text = app.IsSingleFile ? "删除 EXE" : "卸载";
         if (app.DiscoveryWarning is string w) selectedSize.Text += " · " + w;
-        stop.Enabled = has && !processingAction && states.TryGetValue(app.Id, out var state) && state.IsRunning;
         entry.Enabled = canEdit;
+    }
+
+    private void UpdatePictures(string? first, string? second)
+    {
+        string?[] names = { first, second };
+        for (int slot = 0; slot < 2; slot++) {
+            if (string.Equals(displayedPictures[slot], names[slot], StringComparison.Ordinal)) continue;
+            var previous = selectedPictures[slot].Image; selectedPictures[slot].Image = null; previous?.Dispose();
+            displayedPictures[slot] = names[slot];
+            selectedPictures[slot].Image = pictureStore.TryLoad(names[slot], 600);
+            selectedPictures[slot].Cursor = selectedPictures[slot].Image is null ? Cursors.Default : Cursors.Hand;
+            selectedPictures[slot].Invalidate();
+        }
+    }
+
+    private void ShowPicture(int slot)
+    {
+        if (selectedPictures[slot].Image is null) return;
+        using var image = pictureStore.TryLoad(displayedPictures[slot]);
+        if (image is null) { MessageBox.Show(this, "图片暂时不可读取，请重新选择。", "无法打开图片", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+        using var viewer = new Form();
+        Palette.Style(viewer, "软件图片", new Size(1000, 720));
+        viewer.FormBorderStyle = FormBorderStyle.Sizable; viewer.MaximizeBox = true;
+        viewer.Controls.Add(new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, Image = image, BackColor = Palette.Surface });
+        Palette.FinishDialog(viewer); viewer.ShowDialog(this);
     }
     private async Task PollProcessesAsync()
     {
@@ -465,11 +550,33 @@ internal sealed class MainForm : Form
     private void RenameSoftware()
     {
         if (Selected is not { } app || processingAction || scanning) return;
-        using var dialog = new RenameDialog(app);
-        if (dialog.ShowDialog(this) != DialogResult.OK) return;
-        string? previous = app.Preference.DisplayName;
-        try { app.SetDisplayName(dialog.ChosenName); Save(); RenderRows(); SetStatus("已保存显示名称 · " + app.DisplayName); }
-        catch (Exception ex) { app.Preference.DisplayName = previous; ShowError(ex); }
+        processingAction = true; UpdateSelection();
+        try {
+            using var dialog = new RenameDialog(app, pictureStore);
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            string? previousName = app.Preference.DisplayName, previousDescription = app.Preference.Description;
+            string? previousPicture1 = app.Preference.Picture1, previousPicture2 = app.Preference.Picture2;
+            var created = new List<string>();
+            try {
+                app.SetDisplayName(dialog.ChosenName);
+                app.Preference.Description = string.IsNullOrWhiteSpace(dialog.ChosenDescription) ? null : dialog.ChosenDescription;
+                string? ResolvePicture(PictureChoice? choice) {
+                    if (choice is null) return null;
+                    if (choice.Bytes is null) return choice.StoredName;
+                    string name = pictureStore.Import(choice); created.Add(name); return name;
+                }
+                var pictures = dialog.ChosenPictures;
+                app.Preference.Picture1 = ResolvePicture(pictures[0]); app.Preference.Picture2 = ResolvePicture(pictures[1]);
+                Save();
+            } catch {
+                app.Preference.DisplayName = previousName; app.Preference.Description = previousDescription;
+                app.Preference.Picture1 = previousPicture1; app.Preference.Picture2 = previousPicture2;
+                foreach (string name in created) pictureStore.DeleteNewCopy(name);
+                throw;
+            }
+            RenderRows(); SetStatus("已保存软件资料 · " + app.DisplayName);
+        } catch (Exception ex) { ShowError(ex); }
+        finally { processingAction = false; UpdateSelection(); }
     }
     private async Task LaunchAsync()
     {
@@ -482,7 +589,11 @@ internal sealed class MainForm : Form
                 throw new InvalidOperationException("目标软件目录已变化，请刷新列表后重新选择；本次没有启动其他软件。");
             var status = await Task.Run(() => processes.GetState(app.Id));
             if (status.IsRunning) { MessageBox.Show(this, "此软件已由本次管理器启动。首版每个软件同时跟踪一个运行组，请使用已经打开的窗口。", "软件正在运行", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-            await Task.Run(() => processes.Launch(app)); SetStatus("已请求启动 · " + app.Name); await PollProcessesAsync();
+            await Task.Run(() => processes.Launch(app));
+            app.Preference.LastLaunchedAt = DateTimeOffset.UtcNow;
+            try { Save(); SetStatus("已请求启动 · " + app.Name); }
+            catch (Exception ex) { SetStatus("软件已启动，但使用记录保存失败 · " + ex.Message); }
+            RenderRows(); await PollProcessesAsync();
         } catch (Exception ex) { ShowError(ex); }
         finally { processingAction = false; UpdateSelection(); }
     }

@@ -7,7 +7,7 @@ $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | Convert
 try {
     if (-not $InstallRoot) {
         $picker = New-Object System.Windows.Forms.FolderBrowserDialog
-        $picker.Description = '选择老版本轻启的主文件夹（内含 程序 和 启动.cmd）'
+        $picker.Description = '选择老版本轻启的主文件夹（内含 程序 文件夹）'
         $picker.ShowNewFolderButton = $false
         if ($picker.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { exit 0 }
         $InstallRoot = $picker.SelectedPath
@@ -40,6 +40,14 @@ try {
         if ((Get-Item -LiteralPath $existing).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw '现有运行库不能是链接。' }
         if ((Get-FileHash -LiteralPath $existing -Algorithm SHA256).Hash -ne $entry.SHA256) { throw '现有运行库与此升级包不兼容。未修改老版本，请改用完整包。' }
     }
+    if ($manifest.Launcher) {
+        if ($manifest.Launcher.Name -ne '轻启.exe') { throw '启动入口清单格式错误。' }
+        $launcherSource = Join-Path $PSScriptRoot '轻启.exe'
+        if ((Get-Item -LiteralPath $launcherSource).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw '启动入口不能是链接。' }
+        if ((Get-FileHash -LiteralPath $launcherSource -Algorithm SHA256).Hash -ne $manifest.Launcher.SHA256) { throw '启动入口校验失败。' }
+        $launcherTarget = Join-Path $InstallRoot '轻启.exe'
+        if ((Test-Path -LiteralPath $launcherTarget) -and ((Get-Item -LiteralPath $launcherTarget).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '现有启动入口不能是链接。' }
+    }
     if ($CheckOnly) { Write-Output 'PASS upgrade source hashes, target version and runtime compatibility'; exit 0 }
     $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -64,19 +72,28 @@ try {
         if ((Get-Item -LiteralPath $existing).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw '现有程序文件不能是链接。' }
         Copy-Item -LiteralPath $existing -Destination $backup
     }
+    $launcherWasPresent = $false
+    if ($manifest.Launcher -and (Test-Path -LiteralPath $launcherTarget)) { Copy-Item -LiteralPath $launcherTarget -Destination $backup; $launcherWasPresent = $true }
     $changed = @()
+    $launcherChanged = $false
     try {
         foreach ($entry in $manifest.Files) {
             $changed += $entry.Name
             Copy-Item -LiteralPath (Join-Path (Join-Path $PSScriptRoot '程序文件') $entry.Name) -Destination (Join-Path $program $entry.Name) -Force
             if ((Get-FileHash -LiteralPath (Join-Path $program $entry.Name) -Algorithm SHA256).Hash -ne $entry.SHA256) { throw '更新后文件校验失败。' }
         }
+        if ($manifest.Launcher) {
+            $launcherChanged = $true
+            Copy-Item -LiteralPath $launcherSource -Destination $launcherTarget -Force
+            if ((Get-FileHash -LiteralPath $launcherTarget -Algorithm SHA256).Hash -ne $manifest.Launcher.SHA256) { throw '更新后启动入口校验失败。' }
+        }
     } catch {
         $failure = $_
         foreach ($name in $changed) { Copy-Item -LiteralPath (Join-Path $backup $name) -Destination (Join-Path $program $name) -Force }
+        if ($launcherChanged) { if ($launcherWasPresent) { Copy-Item -LiteralPath (Join-Path $backup '轻启.exe') -Destination $launcherTarget -Force } elseif (Test-Path -LiteralPath $launcherTarget) { Remove-Item -LiteralPath $launcherTarget -Force } }
         throw ('更新失败，已恢复原程序：'+$failure.Exception.Message)
     }
-    [IO.File]::WriteAllText((Join-Path $backup '恢复说明.txt'), "退出轻启后，将此目录的四个 LightLaunch 程序文件复制回主文件夹的 程序 目录，即可恢复更新前程序。软件和配置未被升级包改动。", [Text.UTF8Encoding]::new($true))
+    [IO.File]::WriteAllText((Join-Path $backup '恢复说明.txt'), "退出轻启后，将此目录的四个 LightLaunch 程序文件复制回主文件夹的 程序 目录。如本目录含轻启.exe，将它复制回主文件夹；若更新前没有轻启.exe，可删除更新中新加的入口。软件和配置未被升级包改动。", [Text.UTF8Encoding]::new($true))
     if (-not $NoLaunch) { Start-Process -FilePath (Join-Path $program 'LightLaunch.exe') -WorkingDirectory $program }
     Write-Output ('更新成功：'+$manifest.Version+'；原程序备份：'+$backup)
 } catch {

@@ -2,9 +2,14 @@ namespace LightLaunch;
 
 public enum AppKind { Unknown, Portable, Installed }
 public enum LibraryLayout { Categorized, Direct }
+public enum LibrarySort { Recent, Name }
 public sealed class AppPreference
 {
     public string? DisplayName { get; set; }
+    public string? Description { get; set; }
+    public string? Picture1 { get; set; }
+    public string? Picture2 { get; set; }
+    public DateTimeOffset? LastLaunchedAt { get; set; }
     public bool SingleFile { get; set; }
     public string? EntryRelativePath { get; set; }
     public string Arguments { get; set; } = "";
@@ -15,9 +20,12 @@ public sealed class AppPreference
 public sealed class LauncherSettings
 {
     public LibraryLayout Layout { get; set; }
+    public LibrarySort Sort { get; set; } = LibrarySort.Recent;
     public string? LibraryRoot { get; set; }
+    public string? LibraryRootIdentity { get; set; }
     public Dictionary<string, AppPreference> Apps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> FolderIdentities { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> PreviousLocations { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 public sealed class SoftwareItem
 {

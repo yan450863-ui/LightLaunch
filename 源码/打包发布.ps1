@@ -30,14 +30,14 @@ function Copy-WindowsBatch([string]$Source, [string]$Destination) {
     $text = ($text -replace "`r?`n", "`r`n").TrimStart([char]0xFEFF)
     [IO.File]::WriteAllText($Destination, $text, [Text.UTF8Encoding]::new($false))
 }
-Copy-WindowsBatch (Join-Path $projectRoot '启动.cmd') (Join-Path $stage '启动.cmd')
+& (Join-Path $PSScriptRoot '构建启动入口.ps1') -Destination (Join-Path $stage '轻启.exe')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $projectRoot '资料\使用说明.md') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $projectRoot '资料\开源致谢.md') -Destination $stage
 $quickStart = @"
 轻启 LightLaunch $version — Windows 11 x64
 
-完整解压后双击“启动.cmd”，按 Windows UAC 提示确认管理员权限。
+完整解压后双击“轻启.exe”，按 Windows UAC 提示确认管理员权限。
 首次打开默认读取同级“软件文件夹”。每款软件放一个完整文件夹，单 EXE 也可直接放入。
 也可以更换软件根目录，或切换“按分类放软件”模式。
 本包自带 .NET 运行库。配置与检测记录首次运行后保存在同级“数据”目录。
@@ -83,7 +83,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Source archive failed.' }
 $updateStage = Join-Path $releaseRoot "LightLaunch-$version-update"
 New-Item -ItemType Directory -Path (Join-Path $updateStage '程序文件') -Force | Out-Null
 $updateFiles = @('LightLaunch.exe', 'LightLaunch.dll', 'LightLaunch.deps.json', 'LightLaunch.runtimeconfig.json')
-$updateManifest = [ordered]@{ Version=$version; FromVersion='0.1.10'; FromVersions=@('0.1.10','0.1.11'); Files=@(); Runtime=@() }
+$updateManifest = [ordered]@{ Version=$version; FromVersion='0.1.10'; FromVersions=@('0.1.10','0.1.11','0.1.12','0.1.13'); Files=@(); Runtime=@(); Launcher=@{Name='轻启.exe'; SHA256=(Get-FileHash -LiteralPath (Join-Path $stage '轻启.exe') -Algorithm SHA256).Hash} }
+Copy-Item -LiteralPath (Join-Path $stage '轻启.exe') -Destination $updateStage
 foreach ($name in $updateFiles) {
     $file = Join-Path $program $name
     Copy-Item -LiteralPath $file -Destination (Join-Path $updateStage '程序文件')
@@ -95,7 +96,7 @@ foreach ($name in @('coreclr.dll','hostfxr.dll','hostpolicy.dll','System.Private
 [IO.File]::WriteAllText((Join-Path $updateStage '更新清单.json'), ($updateManifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($true))
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '发布工具\更新.ps1') -Destination $updateStage
 Copy-WindowsBatch (Join-Path $PSScriptRoot '发布工具\更新.cmd') (Join-Path $updateStage '更新.cmd')
-[IO.File]::WriteAllText((Join-Path $updateStage '升级说明.txt'), "完整解压后双击 更新.cmd，选择老版本轻启的主文件夹。`r`n支持运行库兼容的 0.1.10、0.1.11；仅更新轻启自身文件，保留用户软件和配置。更新前自动备份，失败自动尝试恢复。`r`n更新完成后，如旧列表将软件拆成了子目录，请将目录模式切换为 直接放软件。`r`n", [Text.UTF8Encoding]::new($true))
+[IO.File]::WriteAllText((Join-Path $updateStage '升级说明.txt'), "完整解压后双击 更新.cmd，选择老版本轻启的主文件夹。`r`n支持运行库兼容的 0.1.10 至 0.1.13；仅更新轻启自身文件，保留用户软件和配置。更新前自动备份，失败自动尝试恢复。`r`n更新完成后，如旧列表将软件拆成了子目录，请将目录模式切换为 直接放软件。`r`n", [Text.UTF8Encoding]::new($true))
 $updateZip = Join-Path $releaseRoot "LightLaunch-$version-update.zip"
 Compress-Archive -LiteralPath $updateStage -DestinationPath $updateZip -CompressionLevel Optimal
 $checksums = foreach ($file in @($binaryZip, $sourceZip, $updateZip)) {

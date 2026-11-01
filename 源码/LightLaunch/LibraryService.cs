@@ -362,6 +362,11 @@ public sealed class LibraryService
         {
             _settings.FolderIdentities.TryGetValue(folder, out string? oldId);
             string id = filesystemId ?? oldId ?? "path:" + Guid.NewGuid().ToString("N");
+            if (filesystemId is not null)
+            {
+                foreach (var previous in _settings.FolderIdentities.Where(p => p.Value == id && !Paths.Equals(p.Key, folder)).ToArray())
+                    if (!File.Exists(previous.Key) && !Directory.Exists(previous.Key)) _settings.PreviousLocations[previous.Key] = id;
+            }
             if (filesystemId is not null && oldId is not null && oldId.StartsWith("path:", StringComparison.OrdinalIgnoreCase)
                 && _settings.Apps.TryGetValue(oldId, out var oldPreference) && !_settings.Apps.ContainsKey(id))
                 _settings.Apps[id] = oldPreference;
@@ -528,7 +533,7 @@ public sealed class LibraryService
 
     private static bool IsFileFailure(Exception ex) => ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException;
 
-    private static string? TryGetDirectoryId(string path)
+    internal static string? TryGetDirectoryId(string path)
     {
         if (!OperatingSystem.IsWindows()) return null;
         try

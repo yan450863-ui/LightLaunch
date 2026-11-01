@@ -5,8 +5,9 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.1.12</Version>
+    <Version>0.1.14</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>LightLaunch.ico</ApplicationIcon>
     <AssemblyName>LightLaunch</AssemblyName>
     <RootNamespace>LightLaunch</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>

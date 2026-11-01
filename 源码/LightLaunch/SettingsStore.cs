@@ -127,6 +127,7 @@ public sealed class SettingsStore
 
     private static void Normalize(LauncherSettings settings)
     {
+        if (!Enum.IsDefined(settings.Sort)) settings.Sort = LibrarySort.Recent;
         var apps = new Dictionary<string, AppPreference>(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in settings.Apps ?? new()) apps[pair.Key] = pair.Value;
         settings.Apps = apps;
@@ -134,6 +135,7 @@ public sealed class SettingsStore
         foreach (var pair in settings.FolderIdentities ?? new())
             if (!string.IsNullOrWhiteSpace(pair.Value)) identities[pair.Key] = pair.Value;
         settings.FolderIdentities = identities;
+        settings.PreviousLocations = new Dictionary<string, string>(settings.PreviousLocations ?? new(), StringComparer.OrdinalIgnoreCase);
         foreach (var key in settings.Apps.Keys.ToArray())
         {
             settings.Apps[key] ??= new AppPreference();
