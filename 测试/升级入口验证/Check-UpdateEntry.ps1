@@ -37,6 +37,7 @@ $batch = Join-Path $output '更新.cmd'
 Copy-Item -LiteralPath $sourceBatch -Destination $batch
 $stub = @'
 param([string]$Value, [int]$Result = 0)
+$null = Get-FileHash -LiteralPath $PSCommandPath -ErrorAction Stop
 [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'reached.txt'), $Value, [Text.UTF8Encoding]::new($true))
 exit $Result
 '@
