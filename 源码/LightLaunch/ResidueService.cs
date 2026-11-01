@@ -134,8 +134,8 @@ public sealed class ResidueService
             }
         }
         foreach (var hive in new[] { RegistryHive.CurrentUser, RegistryHive.LocalMachine })
-        foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
         foreach (var candidate in relativeCandidates)
+        foreach (var view in UninstallService.SoftwareViews(hive, "Software\\" + candidate.Path))
         {
             cancellationToken.ThrowIfCancellationRequested();
             string keyPath = "Software\\" + candidate.Path;
@@ -204,7 +204,7 @@ public sealed class ResidueService
     private static string RegistryLocation(RegistryHive hive, RegistryView view, string path)
         => (hive == RegistryHive.CurrentUser ? "HKCU" : "HKLM") + (view == RegistryView.Registry64 ? " [64]\\" : " [32]\\") + path;
     private static bool SafeSegment(string? value, bool publisher)
-        => !string.IsNullOrWhiteSpace(value) && value.Length is >= 3 and <= 200 && value == value.Trim() && value is not ("." or "..")
+        => !string.IsNullOrWhiteSpace(value) && value.Length is >= 2 and <= 200 && value == value.Trim() && value is not ("." or "..")
             && value.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 && !value.Contains('%')
             && (publisher || !GenericNames.Contains(value));
     private bool IsBroadOriginalFolder(string folder)

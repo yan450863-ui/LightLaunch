@@ -4,7 +4,7 @@ using Microsoft.Win32;
 
 namespace LightLaunch;
 
-public sealed record MigrationPlan(string LibraryRoot,string SoftwareId,string TargetPath,string OriginalPath,string MainRelativePath,UninstallRegistration Registration);
+public sealed record MigrationPlan(string LibraryRoot,string SoftwareId,string TargetPath,string OriginalPath,string MainRelativePath,UninstallRegistration Registration,LibraryLayout Layout=LibraryLayout.Categorized);
 public sealed record MigrationRecord(Guid Id,string LibraryRoot,string SoftwareId,string TargetPath,string OriginalPath,string MainRelativePath,
     UninstallRegistration Registration,string? JunctionIdentity,string State,DateTimeOffset CreatedAt);
 
@@ -43,8 +43,8 @@ public sealed class MigrationService
         }
         var registry=readRegistrations();
         if(registry is not UninstallRegistrationList {ReadComplete:true}) throw new IOException("卸载登记读取不完整，迁入关联未执行。");
-        var current=registry.SingleOrDefault(r=>r.Id==registration.Id);
-        if(current is null || current!=registration) throw new IOException("卸载登记已经变化，请重新选择。");
+        var current=registry.SingleOrDefault(r=>UninstallService.SameRegistrationId(r.Id,registration.Id));
+        if(current is null || !UninstallService.SameRegistration(current,registration)) throw new IOException("卸载登记已经变化，请重新选择。");
         if(string.IsNullOrWhiteSpace(registration.InstallLocation)&&!ReferencedExecutables(registration).Any(path=>LibraryService.IsPathInside(original,path))) {
             var detected=new SoftwareDetectionService().Detect(item,registry);
             if(detected.Proposal.Registration?.Id!=registration.Id||detected.OriginalDirectory is null||!Same(original,detected.OriginalDirectory))
@@ -60,11 +60,11 @@ public sealed class MigrationService
         EnsureNotRunning(target,original);
         EnsureNoServices(original);
         if(GetForItem(item) is not null) throw new IOException("此项目已经有迁入记录，请先核对现有兼容入口；当前不重复建立。");
-        return new(root,item.Id,target,original,Path.GetRelativePath(target,item.EntryPath),registration);
+        return new(root,item.Id,target,original,Path.GetRelativePath(target,item.EntryPath),registration,item.Layout);
     }
     public MigrationRecord Commit(MigrationPlan plan,bool keepCompatibility=false)
     {
-        var item=new SoftwareItem {Id=plan.SoftwareId,FolderPath=plan.TargetPath,Name=Path.GetFileName(plan.TargetPath),
+        var item=new SoftwareItem {Id=plan.SoftwareId,Layout=plan.Layout,FolderPath=plan.TargetPath,Name=Path.GetFileName(plan.TargetPath),
             Preference=new AppPreference{EntryRelativePath=plan.MainRelativePath}};
         var checkedPlan=Prepare(plan.LibraryRoot,item,plan.Registration,plan.OriginalPath);
         var record=new MigrationRecord(Guid.NewGuid(),checkedPlan.LibraryRoot,checkedPlan.SoftwareId,checkedPlan.TargetPath,checkedPlan.OriginalPath,
@@ -101,11 +101,20 @@ public sealed class MigrationService
         }
         return found;
     }
+    private static bool IsOrdinaryEntry(string path)
+    {
+        try { return !File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint); }
+        catch(FileNotFoundException) { return false; }
+        catch(DirectoryNotFoundException) { return false; }
+    }
     public MigrationRecord? RecoverInterrupted(string root,SoftwareItem item)
     {
         var record=GetForItem(item);
         if(record?.State=="TemporaryPrepared") {
             ValidateRecord(root,item,record);
+            if(IsOrdinaryEntry(record.OriginalPath)) {
+                record=record with{State="Detached",JunctionIdentity=null};Write(record);return record;
+            }
             var temporary=DirectoryJunction.Read(record.OriginalPath);
             if(temporary is null){record=record with{State="Detached",JunctionIdentity=null};Write(record);return record;}
             if(!Same(temporary.Target,record.TargetPath))throw new IOException("中断的临时入口已被改变，未处理。");
@@ -117,14 +126,14 @@ public sealed class MigrationService
         if(link is null){Write(record with{State="Failed"});return null;}
         if(!Same(link.Target,record.TargetPath))throw new IOException("中断记录的旧兼容入口指向其他位置，未认领或修改。");
         var registrations=readRegistrations();
-        if(registrations is not UninstallRegistrationList{ReadComplete:true} || !registrations.Contains(record.Registration))throw new IOException("原登记已变化，请先人工核对中断的迁入记录。");
+        if(registrations is not UninstallRegistrationList{ReadComplete:true} || !registrations.Any(value=>UninstallService.SameRegistration(value,record.Registration)))throw new IOException("原登记已变化，请先人工核对中断的迁入记录。");
         var recovered=record with{JunctionIdentity=link.Identity,State="Ready"};Write(recovered);return recovered;
     }
     public void ValidateForUninstall(string root,SoftwareItem item,UninstallRegistration registration)
     {
         var record=GetForItem(item);if(record is null)return;
         ValidateRecord(root,item,record);
-        if(record.Registration!=registration)throw new IOException("所选卸载产品与迁入记录不同或原登记已变化，请重新核对。");
+        if(!UninstallService.SameRegistration(record.Registration,registration))throw new IOException("所选卸载产品与迁入记录不同或原登记已变化，请重新核对。");
         EnsureNoLinkedDescendants(record.TargetPath);
         EnsureNotRunning(record.TargetPath,record.OriginalPath);
         EnsureNoServices(record.OriginalPath);
@@ -142,11 +151,18 @@ public sealed class MigrationService
         ValidateForUninstall(root,item,registration);
         var record=GetForItem(item);if(record is null||record.State=="Ready")return false;
         var registrations=readRegistrations();
-        if(registrations is not UninstallRegistrationList{ReadComplete:true}||!registrations.Contains(registration))throw new IOException("原卸载登记已经变化，未建立临时入口。");
+        if(registrations is not UninstallRegistrationList{ReadComplete:true}||!registrations.Any(value=>UninstallService.SameRegistration(value,registration)))throw new IOException("原卸载登记已经变化，未建立临时入口。");
         EnsureNotRunning(record.TargetPath,record.OriginalPath);
         record=record with{State="TemporaryPrepared"};Write(record);
-        var link=DirectoryJunction.Create(record.OriginalPath,record.TargetPath);
-        Write(record with{State="TemporaryActive",JunctionIdentity=link.Identity});return true;
+        try {
+            var link=DirectoryJunction.Create(record.OriginalPath,record.TargetPath);
+            Write(record with{State="TemporaryActive",JunctionIdentity=link.Identity});return true;
+        } catch {
+            // Keep durable intent if a junction might have been created.
+            if(IsOrdinaryEntry(record.OriginalPath) || !EntryExists(record.OriginalPath))
+                Write(record with{State="Detached",JunctionIdentity=null});
+            throw;
+        }
     }
     /// <summary>For interrupted temporary links the caller must explicitly confirm that the uninstaller has ended.
     /// Only the recorded junction is removed; the real software directory is never deleted.</summary>
@@ -176,7 +192,7 @@ public sealed class MigrationService
         if(!CanRecycleRemainder(root,item))throw new IOException("尚未确认原产品登记已移除，不能清理迁入目录。");
         var record=GetForItem(item)!;EnsureNotRunning(item.FolderPath,record.OriginalPath);
         // Explicit post-uninstall folder recycling; does not change the saved Installed classification.
-        var folder=new SoftwareItem{Id=item.Id,FolderPath=item.FolderPath,Preference=new AppPreference{Kind=AppKind.Portable}};
+        var folder=new SoftwareItem{Id=item.Id,Layout=item.Layout,FolderPath=item.FolderPath,Preference=new AppPreference{Kind=AppKind.Portable}};
         new UninstallService().RecyclePortable(root,folder);
     }
     public string FinishUninstall(string root,SoftwareItem item)

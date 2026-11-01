@@ -125,8 +125,16 @@ internal sealed class ResidueDialog : Form
             string locations=string.Join("\r\n",plan.Entries.Select(e=>e.Finding.Location));
             if(MessageBox.Show(this,$"删除所选 {plan.Entries.Count} 项？\r\n\r\n{locations}\r\n\r\n可能包含个人配置或共享数据。文件移入回收站，注册表先备份。","确认删除残留",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes){cleanup.Discard(plan);Render();return;}
             summary.Text="正在删除…";var outcome=await Task.Run(()=>cleanup.Execute(plan));
-            current=await refreshResult(lifetime.Token);verified=true;Render();
+            verified=false;Render();
             var failed=outcome.Outcomes.Where(item=>!item.Success).ToArray();
+            try { current=await refreshResult(lifetime.Token);verified=true;Render(); }
+            catch(Exception ex) {
+                if(!closed) {
+                    summary.Text=current.Snapshot.SoftwareName+"\r\n删除操作已执行，重新检测未完成，请重试";
+                    MessageBox.Show(this,$"成功 {outcome.Outcomes.Count(item=>item.Success)} 项，保留 {failed.Length} 项。\r\n"+ex.Message,"清理后检测未完成",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                }
+                return;
+            }
             if(failed.Length>0)MessageBox.Show(this,string.Join("\r\n",failed.Select(item=>item.Location+"\r\n"+item.Message)),"部分项目已保留",MessageBoxButtons.OK,MessageBoxIcon.Warning);
         }catch(Exception ex){if(!closed){Render();MessageBox.Show(this,ex.Message,"删除未完成",MessageBoxButtons.OK,MessageBoxIcon.Warning);}}
         finally{if(!closed){SetBusy(false);UpdateActions();}}

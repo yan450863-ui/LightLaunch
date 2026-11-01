@@ -10,6 +10,21 @@ namespace LightLaunch;
 
 public sealed class UninstallService
 {
+    public static RegistryView[] SoftwareViews(RegistryHive hive, string path)
+    {
+        bool redirected = new[] { @"Software\Classes\CLSID", @"Software\Classes\DirectShow", @"Software\Classes\Interface", @"Software\Classes\Media Type", @"Software\Classes\MediaFoundation" }
+            .Any(prefix => path.Equals(prefix, StringComparison.OrdinalIgnoreCase) || path.StartsWith(prefix + "\\", StringComparison.OrdinalIgnoreCase));
+        return hive == RegistryHive.CurrentUser && !redirected ? new[] { RegistryView.Registry64 } : new[] { RegistryView.Registry64, RegistryView.Registry32 };
+    }
+    public static bool SameRegistrationId(string? left, string? right)
+    {
+        static string? Canonical(string? id) => id?.StartsWith("CurrentUser|Registry32|", StringComparison.Ordinal) == true
+            ? "CurrentUser|Registry64|" + id["CurrentUser|Registry32|".Length..] : id;
+        return string.Equals(Canonical(left), Canonical(right), StringComparison.Ordinal);
+    }
+    public static bool SameRegistration(UninstallRegistration left, UninstallRegistration right)
+        => SameRegistrationId(left.Id, right.Id) && (left with { Id = right.Id }) == right;
+
     private const string UninstallKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
 
     public List<UninstallRegistration> GetRegistrations()
@@ -17,7 +32,7 @@ public sealed class UninstallService
         var registrations = new List<UninstallRegistration>();
         bool complete = true;
         foreach (var hive in new[] { RegistryHive.CurrentUser, RegistryHive.LocalMachine })
-        foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+        foreach (var view in SoftwareViews(hive, UninstallKey))
         {
             try
             {
@@ -63,7 +78,7 @@ public sealed class UninstallService
         if (item.Preference.Kind == AppKind.Portable) return new(AppKind.Portable, null, false);
         if (!string.IsNullOrWhiteSpace(item.Preference.UninstallRegistryId))
         {
-            var saved = values.FirstOrDefault(value => value.Id.Equals(item.Preference.UninstallRegistryId, StringComparison.Ordinal));
+            var saved = values.FirstOrDefault(value => SameRegistrationId(value.Id, item.Preference.UninstallRegistryId));
             return new(saved is not null ? AppKind.Installed : item.Preference.Kind, saved, false,
                 saved is null ? "原先选择的卸载记录已不存在，请重新核对选择。" : null);
         }

@@ -17,7 +17,7 @@ public sealed class SoftwareDetectionService
         var direct=UninstallService.ProposeDefault(fresh,records);
         if(direct.Kind==AppKind.Installed)return new(direct,candidates);
         if(migration is not null) {
-            var saved=records.SingleOrDefault(r=>r.Id==migration.Registration.Id);
+            var saved=records.SingleOrDefault(r=>UninstallService.SameRegistrationId(r.Id,migration.Registration.Id));
             if(saved is not null)return new(new(AppKind.Installed,saved,true,"已根据此文件夹的原产品关联识别为安装版。"),new[]{saved},migration.OriginalPath);
             return new(new(AppKind.Unknown,null,false,"原产品登记已移除，请核对剩余文件。"),Array.Empty<UninstallRegistration>());
         }
@@ -48,7 +48,7 @@ public sealed class SoftwareDetectionService
         }
         if(groups.Length>1||direct.Reason?.Contains("多条")==true)return new(new(AppKind.Unknown,null,false,"发现多个匹配产品，请在当前软件的候选中核对。"),candidates.Concat(matches.Select(m=>m.Record)).DistinctBy(r=>r.Id).ToArray());
         if(!string.IsNullOrWhiteSpace(item.Preference.UninstallRegistryId)) {
-            var saved=records.SingleOrDefault(r=>r.Id==item.Preference.UninstallRegistryId);
+            var saved=records.SingleOrDefault(r=>UninstallService.SameRegistrationId(r.Id,item.Preference.UninstallRegistryId));
             if(saved is not null)return new(new(AppKind.Installed,saved,false,"使用此软件已保存的卸载关联，请核对。"),new[]{saved},MigrationService.SuggestOriginalDirectory(saved));
             return new(new(AppKind.Unknown,null,false,"原先保存的卸载登记已不存在，请核对当前软件的处理方式。"),candidates);
         }

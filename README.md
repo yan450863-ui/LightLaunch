@@ -2,7 +2,7 @@
 
 Windows 11 轻量软件启动管理器。把便携软件、自制工具和单 EXE 放进统一目录，查看图标、启动、停止与卸载。
 
-**当前版本：0.1.11，支持 Windows 11 x64。** 使用 .NET 8 Windows Forms，原创代码采用 MIT 许可证。
+**当前版本：0.1.12，支持 Windows 11 x64。** 使用 .NET 8 Windows Forms，原创代码采用 MIT 许可证。
 
 ![轻启主界面](资料/界面/主界面.png)
 
@@ -10,9 +10,9 @@ Windows 11 轻量软件启动管理器。把便携软件、自制工具和单 EX
 
 前往 [Releases](https://github.com/yan450863-ui/LightLaunch/releases/latest)：
 
-- 首次使用：下载 `LightLaunch-0.1.11-win-x64.zip`，自带运行库。完整解压后双击 `启动.cmd`。
-- 已有 0.1.10：下载修正版 `LightLaunch-0.1.11-update-r2.zip`，完整解压后双击 `更新.cmd`，选择老版轻启主文件夹。r2 修复了原升级包 CMD 入口的换行问题，软件版本仍为 0.1.11。只更新轻启自身程序，保留用户软件和配置，无需搬家。运行库不兼容时保留原版并提示使用完整包。
-- 自行编译：下载 `LightLaunch-0.1.11-source-r2.zip` 或克隆仓库。
+- 首次使用：下载 `LightLaunch-0.1.12-win-x64.zip`，自带运行库。完整解压后双击 `启动.cmd`。
+- 已有 0.1.10 或 0.1.11：下载 `LightLaunch-0.1.12-update.zip`，完整解压后双击 `更新.cmd`，选择老版轻启主文件夹。只更新轻启自身程序，保留用户软件和配置，无需搬家。运行库不兼容时保留原版并提示使用完整包。
+- 自行编译：下载 `LightLaunch-0.1.12-source.zip` 或克隆仓库。
 
 程序默认请求管理员权限，需要在 Windows UAC 中确认；启动的工具会继承该权限。当前版本未签名。
 
@@ -69,10 +69,10 @@ dotnet run --project ./测试/目录入口验证/DirectoryChecks.csproj -c Relea
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ./源码/打包发布.ps1
-dotnet run --project ./测试/发布包验证/PackageChecks.csproj -c Release -- ./发布/0.1.11/LightLaunch-0.1.11-win-x64
+dotnet run --project ./测试/发布包验证/PackageChecks.csproj -c Release -- ./发布/0.1.12/LightLaunch-0.1.12-win-x64
 ```
 
-产物在 `发布/0.1.11/`，包含完整包、升级包、源码包及 SHA-256 校验文件。已有同版本目录时拒绝覆盖。`源码/构建.ps1` 保留依赖本机运行库的开发发布方式。
+产物在 `发布/0.1.12/`，包含完整包、升级包、源码包及 SHA-256 校验文件。已有同版本目录时拒绝覆盖。`源码/构建.ps1` 保留依赖本机运行库的开发发布方式。
 
 ## 开源与贡献
 

@@ -83,7 +83,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Source archive failed.' }
 $updateStage = Join-Path $releaseRoot "LightLaunch-$version-update"
 New-Item -ItemType Directory -Path (Join-Path $updateStage '程序文件') -Force | Out-Null
 $updateFiles = @('LightLaunch.exe', 'LightLaunch.dll', 'LightLaunch.deps.json', 'LightLaunch.runtimeconfig.json')
-$updateManifest = [ordered]@{ Version=$version; FromVersion='0.1.10'; Files=@(); Runtime=@() }
+$updateManifest = [ordered]@{ Version=$version; FromVersion='0.1.10'; FromVersions=@('0.1.10','0.1.11'); Files=@(); Runtime=@() }
 foreach ($name in $updateFiles) {
     $file = Join-Path $program $name
     Copy-Item -LiteralPath $file -Destination (Join-Path $updateStage '程序文件')
@@ -95,7 +95,7 @@ foreach ($name in @('coreclr.dll','hostfxr.dll','hostpolicy.dll','System.Private
 [IO.File]::WriteAllText((Join-Path $updateStage '更新清单.json'), ($updateManifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($true))
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '发布工具\更新.ps1') -Destination $updateStage
 Copy-WindowsBatch (Join-Path $PSScriptRoot '发布工具\更新.cmd') (Join-Path $updateStage '更新.cmd')
-[IO.File]::WriteAllText((Join-Path $updateStage '升级说明.txt'), "完整解压后双击 更新.cmd，选择老版本轻启的主文件夹。`r`n支持运行库兼容的 0.1.10；仅更新轻启自身文件，保留用户软件和配置。更新前自动备份，失败自动尝试恢复。`r`n更新完成后，如旧列表将软件拆成了子目录，请将目录模式切换为 直接放软件。`r`n", [Text.UTF8Encoding]::new($true))
+[IO.File]::WriteAllText((Join-Path $updateStage '升级说明.txt'), "完整解压后双击 更新.cmd，选择老版本轻启的主文件夹。`r`n支持运行库兼容的 0.1.10、0.1.11；仅更新轻启自身文件，保留用户软件和配置。更新前自动备份，失败自动尝试恢复。`r`n更新完成后，如旧列表将软件拆成了子目录，请将目录模式切换为 直接放软件。`r`n", [Text.UTF8Encoding]::new($true))
 $updateZip = Join-Path $releaseRoot "LightLaunch-$version-update.zip"
 Compress-Archive -LiteralPath $updateStage -DestinationPath $updateZip -CompressionLevel Optimal
 $checksums = foreach ($file in @($binaryZip, $sourceZip, $updateZip)) {

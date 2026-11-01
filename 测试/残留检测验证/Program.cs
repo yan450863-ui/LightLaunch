@@ -134,15 +134,15 @@ foreach (var state in new[] { ResiduePresence.Unknown, ResiduePresence.SkippedLi
     var probe = Fresh();
     var expected = new HashSet<(RegistryHive, RegistryView, string)>();
     foreach (var hive in new[] { RegistryHive.CurrentUser, RegistryHive.LocalMachine })
-    foreach (var view in new[] { RegistryView.Registry32, RegistryView.Registry64 })
+    foreach (var view in hive == RegistryHive.CurrentUser ? new[] { RegistryView.Registry64 } : new[] { RegistryView.Registry32, RegistryView.Registry64 })
     foreach (var path in new[] { @"Software\BowPad", @"Software\StefansTools\BowPad" })
     {
         expected.Add((hive, view, path));
         probe.Registry[(hive, view, path)] = new(ResiduePresence.Present);
     }
     var result = Scan(probe);
-    Check("HKCU and HKLM in both views probe all eight precise candidates", expected.All(x => probe.RegistryCalls.Contains(x)));
-    Check("All eight software-registry candidates remain possible shared", result.Findings.Count == 8 && result.Findings.All(x => x.Source == "SoftwareRegistry" && x.Confidence == ResidueConfidence.PossibleShared));
+    Check("Shared HKCU and distinct HKLM views probe six precise candidates", expected.All(x => probe.RegistryCalls.Contains(x)));
+    Check("Six software-registry candidates remain possible shared", result.Findings.Count == 6 && result.Findings.All(x => x.Source == "SoftwareRegistry" && x.Confidence == ResidueConfidence.PossibleShared));
     Check("Publisher-only or prefix keys are not probed", probe.RegistryCalls.All(x => expected.Contains(x) || x == (RegistryHive.LocalMachine, RegistryView.Registry64, uninstallKey)));
 }
 {
@@ -187,6 +187,15 @@ foreach (var state in new[] { ResiduePresence.Unknown, ResiduePresence.SkippedLi
     var result = Scan(probe, historical with { Names = new[] { "BowPad", foreignAlias } });
     Check("Historical arbitrary aliases cannot create extra scan targets", !probe.PathCalls.Any(x => x.Contains(foreignAlias)) && !probe.RegistryCalls.Any(x => x.Key.Contains(foreignAlias)));
     Check("Ignored historical aliases record warning and prevent clean claim", result.Warnings.Count > 0 && !result.ScanComplete && !result.NoCandidatesInCheckedScope);
+}
+
+foreach (var name in new[] { "微信", "QQ", "钉钉" })
+{
+    var probe = Fresh();
+    var result = Scan(probe, ResidueSnapshot.Create(name, folder, main, registration with { DisplayName = name }));
+    Check(name + " short name completes", result.ScanComplete && result.NoCandidatesInCheckedScope);
+    Check(name + " exact candidate is checked", probe.RegistryCalls.Contains((RegistryHive.CurrentUser, RegistryView.Registry64, "Software\\" + name)));
+    Check(name + " shared HKCU is not checked twice", !probe.RegistryCalls.Contains((RegistryHive.CurrentUser, RegistryView.Registry32, "Software\\" + name)));
 }
 
 Console.WriteLine($"Residue checks: {passed} passed, {failed.Count} failed. Fake probes only; no system mutations or UI.");

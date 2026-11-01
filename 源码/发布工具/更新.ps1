@@ -21,7 +21,9 @@ try {
     }
     $oldDll = Join-Path $program 'LightLaunch.dll'
     $oldVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($oldDll).FileVersion
-    if ($oldVersion -notin @(($manifest.FromVersion+'.0'), ($manifest.Version+'.0'))) { throw '此升级包仅支持 0.1.10，请使用完整包更新并保留数据目录。' }
+    $supportedVersions = if ($manifest.FromVersions) { @($manifest.FromVersions) } else { @($manifest.FromVersion) }
+    $allowedVersions = @($supportedVersions | ForEach-Object { $_ + '.0' }) + @($manifest.Version + '.0')
+    if ($oldVersion -notin $allowedVersions) { throw ('此升级包支持 '+($supportedVersions -join '、')+'，请使用对应版本或完整包更新并保留数据目录。') }
     if (@($manifest.Files).Count -ne 4 -or @($manifest.Runtime).Count -ne 5 -or @($manifest.Files.Name | Select-Object -Unique).Count -ne 4 -or @($manifest.Runtime.Name | Select-Object -Unique).Count -ne 5) { throw '更新清单缺少文件或存在重复项。' }
     foreach ($entry in @($manifest.Files) + @($manifest.Runtime)) {
         if ($entry.Name -notmatch '^[A-Za-z0-9.\-]+$' -or $entry.Name.Contains('..')) { throw '更新清单格式错误。' }

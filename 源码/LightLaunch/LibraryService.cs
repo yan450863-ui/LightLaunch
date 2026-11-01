@@ -6,6 +6,30 @@ namespace LightLaunch;
 /// <summary>Discovers software without launching or modifying anything in its folders.</summary>
 public sealed class LibraryService
 {
+    public static string? LibraryRootProblem(string root)
+    {
+        if (!TryNormalize(root, out var path)) return "请选择有效的软件专用目录。";
+        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        if (!string.IsNullOrEmpty(windows) && (Paths.Equals(path, windows) || IsPathInside(windows, path)))
+            return "不能将 Windows 系统目录作为软件库。";
+        var containers = new[] { Path.GetPathRoot(path), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), Environment.GetEnvironmentVariable("PUBLIC") };
+        return containers.Where(value => !string.IsNullOrWhiteSpace(value)).Any(value => Paths.Equals(path, Path.TrimEndingDirectorySeparator(Path.GetFullPath(value!))))
+            ? "请选择单独存放软件的子文件夹，不能使用磁盘根目录或系统、用户公共目录。" : null;
+    }
+
+    public static bool ShouldRescanChange(string root, LibraryLayout layout, string path, WatcherChangeTypes change)
+    {
+        if (!IsPathInside(root, path)) return false;
+        string relative = Path.GetRelativePath(root, path);
+        int depth = relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries).Length;
+        bool structure = change != WatcherChangeTypes.Changed && depth <= (layout == LibraryLayout.Direct ? 1 : 2);
+        return structure || IsSupportedEntry(path);
+    }
+
     private readonly LauncherSettings _settings;
     private readonly object _scanLock = new();
     private List<SoftwareItem> _lastItems = new();
@@ -28,7 +52,7 @@ public sealed class LibraryService
     {
         token.ThrowIfCancellationRequested();
         var warnings = new WarningList();
-        if (!TryNormalize(root, out var normalizedRoot) || !HasNoReparseAncestors(normalizedRoot, true))
+        if (LibraryRootProblem(root) is not null || !TryNormalize(root, out var normalizedRoot) || !HasNoReparseAncestors(normalizedRoot, true))
         {
             warnings.Add("软件根目录不可访问，或路径经过了目录链接。原有配置已保留。");
             return new(false, GetKnownItems(root, "根目录当前不可访问，无法核实文件状态。"), warnings.Items);
@@ -214,7 +238,7 @@ public sealed class LibraryService
 
     public static bool IsSafeSoftwareFolder(string root, string folder, LibraryLayout layout = LibraryLayout.Categorized)
     {
-        if (!TryNormalize(root, out string normalizedRoot) || !TryNormalize(folder, out string normalizedFolder)
+        if (LibraryRootProblem(root) is not null || !TryNormalize(root, out string normalizedRoot) || !TryNormalize(folder, out string normalizedFolder)
             || !HasLayoutDepth(normalizedRoot, normalizedFolder, layout)) return false;
         return HasNoReparseAncestors(normalizedRoot, true) && HasNoReparseAncestors(normalizedFolder, true);
     }
@@ -242,7 +266,7 @@ public sealed class LibraryService
     }
 
     public static bool IsSafeStandaloneFile(string root, string file, LibraryLayout layout)
-        => TryNormalize(root, out string normalizedRoot) && TryNormalize(file, out string normalizedFile)
+        => LibraryRootProblem(root) is null && TryNormalize(root, out string normalizedRoot) && TryNormalize(file, out string normalizedFile)
             && HasLayoutDepth(normalizedRoot, normalizedFile, layout)
             && Path.GetExtension(normalizedFile).Equals(".exe", StringComparison.OrdinalIgnoreCase)
             && IsSafeEntryPath(Path.GetDirectoryName(normalizedFile)!, normalizedFile);

@@ -58,9 +58,9 @@ internal sealed class EntryDialog : Form
         if (WorkingDirectory is string relative)
         {
             string folder;
-            try { folder = Path.GetFullPath(Path.Combine(item.FolderPath, relative)); }
+            try { folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(item.FolderPath, relative))); }
             catch { MessageBox.Show(this, "工作目录格式无效。", "选择入口"); return; }
-            if (Path.IsPathRooted(relative) || (!string.Equals(folder, item.FolderPath, StringComparison.OrdinalIgnoreCase) && !LibraryService.IsPathInside(item.FolderPath, folder)) || !Directory.Exists(folder))
+            if (Path.IsPathRooted(relative) || (!string.Equals(folder, Path.TrimEndingDirectorySeparator(item.FolderPath), StringComparison.OrdinalIgnoreCase) && !LibraryService.IsPathInside(item.FolderPath, folder)) || !Directory.Exists(folder))
             { MessageBox.Show(this, "工作目录必须是软件文件夹内存在的相对目录。", "选择入口"); return; }
         }
         ChosenEntry = chosen; DialogResult = DialogResult.OK;

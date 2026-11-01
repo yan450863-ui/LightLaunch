@@ -290,6 +290,7 @@ internal sealed class MainForm : Form
     {
         using var dialog = new FolderBrowserDialog { Description = "选择软件根目录", UseDescriptionForTitle = true, ShowNewFolderButton = true, SelectedPath = store.Settings.LibraryRoot ?? "" };
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        if (LibraryService.LibraryRootProblem(dialog.SelectedPath) is string problem) { ShowError(new IOException(problem)); return; }
         store.Settings.LibraryRoot = Path.GetFullPath(dialog.SelectedPath); sizes.Clear();
         try { Save(); } catch (Exception ex) { ShowError(ex); }
         ConfigureWatcher(); await ScanAsync();
@@ -299,11 +300,11 @@ internal sealed class MainForm : Form
         watcher?.Dispose(); watcher = null;
         var root = store.Settings.LibraryRoot; if (string.IsNullOrEmpty(root)) return;
         try {
-            if (!Directory.Exists(root)) return;
-            watcher = new FileSystemWatcher(root) { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.DirectoryName | NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size, InternalBufferSize = 32768 };
-            FileSystemEventHandler change = (_, e) => MarkChange(e.FullPath);
+            if (!Directory.Exists(root) || LibraryService.LibraryRootProblem(root) is not null) return;
+            watcher = new FileSystemWatcher(root) { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.DirectoryName | NotifyFilters.FileName | NotifyFilters.LastWrite, InternalBufferSize = 32768 };
+            FileSystemEventHandler change = (_, e) => { if (LibraryService.ShouldRescanChange(root, store.Settings.Layout, e.FullPath, e.ChangeType)) MarkChange(e.FullPath); };
             watcher.Created += change; watcher.Deleted += change; watcher.Changed += change;
-            watcher.Renamed += (_, e) => { MarkChange(e.FullPath); MarkChange(e.OldFullPath); };
+            watcher.Renamed += (_, e) => { if (LibraryService.ShouldRescanChange(root, store.Settings.Layout, e.FullPath, e.ChangeType)) MarkChange(e.FullPath); if (LibraryService.ShouldRescanChange(root, store.Settings.Layout, e.OldFullPath, e.ChangeType)) MarkChange(e.OldFullPath); };
             watcher.Error += (_, e) => { watcherError = true; watcherFailure = e.GetException().Message; MarkChange(root); };
             watcher.EnableRaisingEvents = true;
         } catch (Exception ex) { watcherError = true; watcherFailure = ex.Message; }
@@ -363,6 +364,9 @@ internal sealed class MainForm : Form
         string query = search.Text.Trim();
         var visible = items.Where(x => category == null || x.Category == category).Where(x => query.Length == 0 || (x.DisplayName + " " + x.Name + " " + x.Category + " " + x.FolderPath).Contains(query, StringComparison.CurrentCultureIgnoreCase)).OrderBy(x => x.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToArray();
         listSummary.Text = $"{visible.Length} 个软件" + (category is null ? " · 全部分类" : " · " + category);
+        int oldTop = grid.FirstDisplayedScrollingRowIndex;
+        string? topId = oldTop >= 0 ? (grid.Rows[oldTop].Tag as SoftwareItem)?.Id : null;
+        int horizontalOffset = grid.HorizontalScrollingOffset;
         updatingGrid = true; grid.Rows.Clear();
         foreach (var app in visible) {
             int index = grid.Rows.Add(GetIcon(app), app.DisplayName, app.Category, SizeText(app), StatusText(app), app.Name); var row = grid.Rows[index]; row.Tag = app;
@@ -373,6 +377,9 @@ internal sealed class MainForm : Form
         grid.ClearSelection();
         var selectedRow = grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(x => (x.Tag as SoftwareItem)?.Id == selectedId) ?? grid.Rows.Cast<DataGridViewRow>().FirstOrDefault();
         if (selectedRow != null) { selectedRow.Selected = true; grid.CurrentCell = selectedRow.Cells[1]; }
+        var topRow = grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(row => (row.Tag as SoftwareItem)?.Id == topId);
+        if (grid.Rows.Count > 0 && oldTop >= 0) grid.FirstDisplayedScrollingRowIndex = topRow?.Index ?? Math.Min(oldTop, grid.Rows.Count - 1);
+        grid.HorizontalScrollingOffset = horizontalOffset;
         updatingGrid = false;
         if (items.Count == 0) SetEmpty("暂无软件", store.Settings.Layout == LibraryLayout.Direct ? "将完整的软件文件夹放入当前软件目录。" : "将软件文件夹放入分类目录。");
         else if (visible.Length == 0) SetEmpty("没有匹配的软件", "");

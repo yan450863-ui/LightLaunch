@@ -96,6 +96,7 @@ public sealed class SettingsStore
                     Normalize(Settings);
                     json = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(Settings, JsonOptions));
                 }
+                if (File.Exists(_writePath) && File.ReadAllBytes(_writePath).AsSpan().SequenceEqual(json)) return;
                 using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write,
                            FileShare.None, 4096, FileOptions.WriteThrough))
                 {
